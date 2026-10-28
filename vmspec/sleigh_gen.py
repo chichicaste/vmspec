@@ -361,9 +361,14 @@ def emit_header(lines: list[str], vm_state: VMState, *, with_context: bool = Tru
     lines.append("define space register type=register_space size=4;")
     lines.append("")
 
-    # Instruction token: the (encrypted or clear) opcode byte.
-    lines.append("define token instr(8)")
+    # Instruction token: the (encrypted or clear) opcode byte followed by up to
+    # 4 operand bytes. op1/op2/op4 select the operand width (1/2/4 bytes); a
+    # constructor references exactly one to consume its operand.
+    lines.append("define token instr(40)")
     lines.append("  byte=(0,7)")
+    lines.append("  op1=(8,15)")
+    lines.append("  op2=(8,23)")
+    lines.append("  op4=(8,39)")
     lines.append(";")
     lines.append("")
 

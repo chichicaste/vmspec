@@ -127,11 +127,14 @@ def generate_skeleton(
         else:
             lines.append(f"# opcode=0x{opcode:02X} (unanalysed handler)")
 
+        # operand field suffix: op1/op2/op4 consume 1/2/4 bytes after the opcode.
+        op_field = {1: " & op1", 2: " & op2", 4: " & op4"}.get(operand_size, "")
+
         if clear:
-            lines.append(f":{name} is byte = 0x{opcode:02X} unimpl")
+            lines.append(f":{name} is byte = 0x{opcode:02X}{op_field} unimpl")
         else:
             lines.append(
-                f":{name} is byte = 0x{c:X} + key - 1 "
+                f":{name} is byte = 0x{c:X} + key - 1{op_field} "
                 f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] unimpl"
             )
         lines.append("")
