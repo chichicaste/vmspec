@@ -30,13 +30,14 @@ from __future__ import annotations
 import struct
 import sys
 
+from vmspec.operand import decrypt_operand, handler_key_update
 from vmspec.sweep import sweep
 
 # VM-relative constants (see tools/gen_config.py; ENGINE is the host base).
 ENGINE = 0x1AE1000
 BC_OFF = 0x6575          # bytecode program entry
 TAB_OFF = 0x5000         # dispatch table (256 x u32: opcode -> handler offset)
-INITIAL_KEY = 0x75       # low byte of the dispatcher's initial key (0x407575)
+INITIAL_KEY = 0x407575   # dispatcher's initial 32-bit rolling key
 
 # handler offset -> operand length (bytes following the encrypted opcode).
 # Extracted from the reconstructed interpreter semantics (ettool2_vm.cpp).
@@ -77,29 +78,40 @@ def main(argv: list[str]) -> int:
     dbin = open(blob_path, "rb").read()
     tbl = struct.unpack_from("<256I", dbin, TAB_OFF)
 
-    def operand_len(op: int) -> int:
-        return OPERAND_LEN.get(tbl[op] - ENGINE, 0)
+    def step(op: int, addr: int, key: int, dbin: bytes):
+        """Decrypt the operand + apply the handler's key update."""
+        hoff = tbl[op] - ENGINE
+        olen = OPERAND_LEN.get(hoff, 0)
+        operand = dbin[addr + 1:addr + 1 + olen]
+        clear = decrypt_operand(hoff, operand, key)
+        next_key = handler_key_update(hoff, clear or b"", key)
+        return addr + 1 + olen, next_key, clear
 
     # control-flow opcodes = table indices whose handler offset is jmp/ret_native
     control_flow = frozenset(
         op for op in range(256) if tbl[op] - ENGINE in _CONTROL_FLOW_OFF
     )
-    result = sweep(dbin, BC_OFF, INITIAL_KEY, operand_len, control_flow=control_flow)
+    result = sweep(dbin, BC_OFF, INITIAL_KEY, step, control_flow=control_flow)
 
-    # materialize the clear image (size-preserving: opcode byte -> clear opcode)
+    # materialize the clear image (size-preserving: opcode + operands -> clear)
     clear = bytearray(dbin)
     for addr, op in result.opcode_at.items():
-        clear[addr] = op
+        clear[addr] = op  # clear opcode
+        operand = result.operand_at.get(addr)
+        if operand:
+            clear[addr + 1:addr + 1 + len(operand)] = operand
 
     open(out_clear, "wb").write(bytes(clear))
     open(out_spec, "w", encoding="utf-8").write(_clear_spec())
 
     first = sorted(result.opcode_at.items())[:12]
+    n_operands = sum(1 for o in result.operand_at.values() if o is not None)
     print(f"decrypted {len(result.opcode_at)} instructions ({result.states} states)")
     print(f"first opcodes: {[hex(o) for _, o in first]}")
+    print(f"operands decrypted: {n_operands}")
     if result.conflicts:
         print(f"WARNING: {len(result.conflicts)} key conflicts: "
-              f"{[f'0x{a:x}:[0x{k1:02x},0x{k2:02x}]' for a, k1, k2 in result.conflicts[:5]]}")
+              f"{[f'0x{a:x}:[0x{k1:08x},0x{k2:08x}]' for a, k1, k2 in result.conflicts[:5]]}")
     print(f"wrote {out_clear} + {out_spec}")
     return 0
 
