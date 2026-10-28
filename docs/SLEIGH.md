@@ -199,3 +199,39 @@ declares a named temporary.
 - **Variable-length instructions.** The `;` concatenation operator (§7.4.4.1 of
   the SLEIGH manual) is required once handlers consume operands beyond the
   opcode byte; the current spec only models the single opcode byte.
+
+## 12. Variable-length operands + P-Code semantics (implemented)
+
+The skeleton now consumes operand bytes and emits P-Code bodies.
+
+**Operand fields.** Extend the token to cover the opcode + up to 4 operand
+bytes, and declare one field per operand width (they overlap; a constructor
+references exactly one):
+
+```sleigh
+define token instr(40)
+  byte=(0,7)
+  op1=(8,15)      # 1-byte operand
+  op2=(8,23)      # 2-byte operand
+  op4=(8,39)      # 4-byte operand
+;
+```
+
+A field referenced in the pattern *without* a constraint is a "don't care"
+that consumes its bytes: `:op is byte = 0x13 & op4 ...` is a 5-byte
+instruction.  `&` is the pattern combiner, not bitwise-and.
+
+**Field in the semantics.** A token field is a varnode in the semantics body;
+its value is the operand bits: `*:4 VSP = op4;`.
+
+**zext/sext need an explicit-sized temporary.** `sext(op1)` on a raw token
+field fails with `Could not resolve at least 1 variable size`; assign the field
+to a sized temporary first:
+
+```sleigh
+tmp1:1 = op1;
+tmp:4 = sext(tmp1);
+```
+
+`zext(x)`/`sext(x)` resolve their target size from the assignment target
+(`tmp:4 = sext(tmp1)` → 4 bytes), not from the source.
