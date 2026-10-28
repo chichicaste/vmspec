@@ -120,17 +120,21 @@ def _node_label(node_id: int) -> str:
     return f"node_{node_id}"
 
 
-def _body_nodes(graph: GraphNode, entry: int) -> list[GraphNode]:
+def _body_nodes(graph: GraphNode, start_id: int) -> list[GraphNode]:
     """Ordered state-graph nodes covering one handler body.
 
-    Starts at the node whose ``addr`` matches the handler entry (falling
-    back to the graph root) and walks successors in order, visiting every
-    node at most once (back-edges therefore terminate the walk).
+    Starts at the handler graph's root node -- ``start_id``, as recorded in
+    the synthetic root's successors -- and walks successors in order,
+    visiting every node at most once (back-edges therefore terminate the
+    walk).  Resolving the root by its id (instead of scanning for a node
+    whose ``addr`` equals the handler entry) is what keeps a handler body
+    complete: a node from another handler or a collapsed leaf may sit at
+    the same address and would otherwise truncate the walk.
     """
     registry: dict[int, GraphNode] = getattr(graph, "_nodes", None) or {
         graph.id: graph
     }
-    start = next((n for n in registry.values() if n.addr == entry), graph)
+    start = registry.get(start_id) or graph
     body: list[GraphNode] = []
     seen: set[int] = set()
     stack: list[int] = [start.id]
@@ -205,7 +209,12 @@ def generate_sleigh(
     graph: GraphNode, vm_state: VMState, handlers: list[Handler]
 ) -> str:
     """Generate a minimal SLEIGH ``.slaspec`` for the VM described by
-    *vm_state*, with one per-handler constructor derived from *graph*."""
+    *vm_state*, with one per-handler constructor derived from *graph*.
+
+    *graph* must be the synthetic root produced by the pipeline: its
+    successors are one per handler graph (in the order of *handlers*), so
+    each constructor's body is walked from its handler graph's root.
+    """
     # Registry of usable register names (for resolving symbolic references).
     reg_names: set[str] = {vm_state.vpc}
     if vm_state.vsp is not None:
@@ -251,8 +260,11 @@ def generate_sleigh(
     # Handler constructors.
     r = _Render(reg_names=frozenset(reg_names))
     used_labels: set[str] = set()
-    for handler in handlers:
-        body = _body_nodes(graph, handler.entry)
+    # The synthetic root carries one successor per handler graph, in the
+    # same order as `handlers` (see pipeline._merge_handler_graphs); its
+    # target is that handler graph's root id.
+    for handler, (_, handler_root_id) in zip(handlers, graph.successors):
+        body = _body_nodes(graph, handler_root_id)
         base = _label(handler.mnemonic or f"op_{handler.opcode:X}")
         name, k = base, 1
         while name in used_labels:

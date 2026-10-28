@@ -78,17 +78,24 @@ def install(state: angr.SimState, read_only_ranges: tuple[tuple[int, int], ...] 
             state.inspect.mem_read_expr = _fresh_read_var(state, length * 8)
 
     def after_read(state):
+        # Record into *this* state's recorder: inspect breakpoints are
+        # copied verbatim to forked states, so the closure must resolve the
+        # per-state plugin rather than use the instance captured at install
+        # time (which would accumulate every path's ops on the initial
+        # state's recorder and leave each fork's own list empty).
+        r = state.vmspec_recorder
         addr = state.inspect.mem_read_address
         value = state.inspect.mem_read_expr
         length = state.inspect.mem_read_length or 1
-        rec.mem_ops.append(MemAccess("read", addr, value, length))
+        r.mem_ops.append(MemAccess("read", addr, value, length))
 
     def after_write(state):
+        r = state.vmspec_recorder
         addr = state.inspect.mem_write_address
         value = state.inspect.mem_write_expr
         length = getattr(value, "size", lambda: 0)()
         length = length // 8 if length else 1
-        rec.mem_ops.append(MemAccess("write", addr, value, length))
+        r.mem_ops.append(MemAccess("write", addr, value, length))
 
     state.inspect.b("mem_read", when=angr.BP_BEFORE, action=before_read)
     state.inspect.b("mem_read", when=angr.BP_AFTER, action=after_read)

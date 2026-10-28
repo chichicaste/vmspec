@@ -24,6 +24,7 @@ from pathlib import Path
 
 # VM-relative constants (ENGINE is the host address where the blob is mapped).
 ENGINE = 0x1AE1000
+DISPATCHER = 0x1AE1198  # shared VM dispatcher (fetch + decrypt + jmp [eax*4+0x1ae6000])
 TAB_OFF = 0x5000  # dispatch table: opcode -> handler offset (256 entries)
 BC_OFF = 0x6575  # bytecode program entry
 DATA_OFF = 0x1000  # scratch data region
@@ -88,8 +89,10 @@ def extract_handlers(dbin: bytes) -> list[dict]:
     """Enumerate handlers from the dispatch table at ``dbin + TAB_OFF``.
 
     Returns a list of handler descriptors ``{opcode, entry, end, mnemonic}``
-    (one entry per unique handler offset; ``end`` is the next handler offset,
-    an estimate that the DSE refines).
+    (one entry per unique handler offset).  Every handler is native x86 that
+    ends with an absolute ``jmp`` into the shared dispatcher inside the blob,
+    so ``end`` is ``DISPATCHER`` for all handlers and is used by the DSE as
+    the exploration terminator.
     """
     # group opcodes by handler offset
     by_offset: dict[int, list[int]] = {}
@@ -97,15 +100,13 @@ def extract_handlers(dbin: bytes) -> list[dict]:
         raw = struct.unpack_from("<I", dbin, TAB_OFF + op * 4)[0]
         by_offset.setdefault(raw - ENGINE, []).append(op)
 
-    offsets = sorted(by_offset)
     handlers: list[dict] = []
-    for i, off in enumerate(offsets):
-        end = offsets[i + 1] if i + 1 < len(offsets) else off + 0x40
+    for off in sorted(by_offset):
         handlers.append(
             {
                 "opcode": by_offset[off][0],
                 "entry": ENGINE + off,
-                "end": ENGINE + end,
+                "end": DISPATCHER,
                 "mnemonic": MNEMONICS.get(off, f"handler_{off:04X}"),
             }
         )

@@ -25,307 +25,307 @@
     {
       "opcode": 100,
       "entry": 28184586,
-      "end": 28184621,
+      "end": 28184984,
       "mnemonic": "ld_data_u16"
     },
     {
       "opcode": 2,
       "entry": 28184621,
-      "end": 28184632,
+      "end": 28184984,
       "mnemonic": "ld_data_u32"
     },
     {
       "opcode": 55,
       "entry": 28184632,
-      "end": 28184664,
+      "end": 28184984,
       "mnemonic": "push_u16"
     },
     {
       "opcode": 9,
       "entry": 28184664,
-      "end": 28184677,
+      "end": 28184984,
       "mnemonic": "ld_u8"
     },
     {
       "opcode": 75,
       "entry": 28184677,
-      "end": 28184703,
+      "end": 28184984,
       "mnemonic": "push_u8"
     },
     {
       "opcode": 84,
       "entry": 28184703,
-      "end": 28184718,
+      "end": 28184984,
       "mnemonic": "shr_u16"
     },
     {
       "opcode": 59,
       "entry": 28184718,
-      "end": 28184752,
+      "end": 28184984,
       "mnemonic": "st_data_u16"
     },
     {
       "opcode": 17,
       "entry": 28184752,
-      "end": 28184767,
+      "end": 28184984,
       "mnemonic": "and"
     },
     {
       "opcode": 200,
       "entry": 28184767,
-      "end": 28184777,
+      "end": 28184984,
       "mnemonic": "push_sp16"
     },
     {
       "opcode": 33,
       "entry": 28184777,
-      "end": 28184788,
+      "end": 28184984,
       "mnemonic": "ld_u8"
     },
     {
       "opcode": 142,
       "entry": 28184788,
-      "end": 28184802,
+      "end": 28184984,
       "mnemonic": "shl_u16"
     },
     {
       "opcode": 109,
       "entry": 28184802,
-      "end": 28184811,
+      "end": 28184984,
       "mnemonic": "push_sp"
     },
     {
       "opcode": 79,
       "entry": 28184811,
-      "end": 28184820,
+      "end": 28184984,
       "mnemonic": "st_u32"
     },
     {
       "opcode": 83,
       "entry": 28184820,
-      "end": 28184847,
+      "end": 28184984,
       "mnemonic": "mul_u32"
     },
     {
       "opcode": 74,
       "entry": 28184847,
-      "end": 28184875,
+      "end": 28184984,
       "mnemonic": "and_u16"
     },
     {
       "opcode": 53,
       "entry": 28184875,
-      "end": 28184909,
+      "end": 28184984,
       "mnemonic": "push_i8"
     },
     {
       "opcode": 19,
       "entry": 28184909,
-      "end": 28184931,
+      "end": 28184984,
       "mnemonic": "push_u32"
     },
     {
       "opcode": 3,
       "entry": 28184931,
-      "end": 28184940,
+      "end": 28184984,
       "mnemonic": "st_u32"
     },
     {
       "opcode": 69,
       "entry": 28184940,
-      "end": 28184950,
+      "end": 28184984,
       "mnemonic": "add_u32"
     },
     {
       "opcode": 41,
       "entry": 28184950,
-      "end": 28185013,
+      "end": 28184984,
       "mnemonic": "pop"
     },
     {
       "opcode": 7,
       "entry": 28185013,
-      "end": 28185027,
+      "end": 28184984,
       "mnemonic": "shrd"
     },
     {
       "opcode": 88,
       "entry": 28185027,
-      "end": 28185191,
+      "end": 28184984,
       "mnemonic": "add_u16"
     },
     {
       "opcode": 86,
       "entry": 28185191,
-      "end": 28185206,
+      "end": 28184984,
       "mnemonic": "shl_u16"
     },
     {
       "opcode": 77,
       "entry": 28185206,
-      "end": 28185215,
+      "end": 28184984,
       "mnemonic": "ld_u32"
     },
     {
       "opcode": 45,
       "entry": 28185215,
-      "end": 28185223,
+      "end": 28184984,
       "mnemonic": "st_u32"
     },
     {
       "opcode": 21,
       "entry": 28185223,
-      "end": 28185234,
+      "end": 28184984,
       "mnemonic": "add_u8"
     },
     {
       "opcode": 124,
       "entry": 28185234,
-      "end": 28185242,
+      "end": 28184984,
       "mnemonic": "set_sp"
     },
     {
       "opcode": 85,
       "entry": 28185242,
-      "end": 28185253,
+      "end": 28184984,
       "mnemonic": "st_u8"
     },
     {
       "opcode": 47,
       "entry": 28185253,
-      "end": 28185265,
+      "end": 28184984,
       "mnemonic": "ld_u8"
     },
     {
       "opcode": 49,
       "entry": 28185265,
-      "end": 28185276,
+      "end": 28184984,
       "mnemonic": "st_u8"
     },
     {
       "opcode": 125,
       "entry": 28185276,
-      "end": 28185297,
+      "end": 28184984,
       "mnemonic": "ld_u32"
     },
     {
       "opcode": 61,
       "entry": 28185297,
-      "end": 28185311,
+      "end": 28184984,
       "mnemonic": "shr_u16"
     },
     {
       "opcode": 51,
       "entry": 28185311,
-      "end": 28185324,
+      "end": 28184984,
       "mnemonic": "div_u64"
     },
     {
       "opcode": 29,
       "entry": 28185324,
-      "end": 28185339,
+      "end": 28184984,
       "mnemonic": "and_not"
     },
     {
       "opcode": 108,
       "entry": 28185339,
-      "end": 28185348,
+      "end": 28184984,
       "mnemonic": "st_u16"
     },
     {
       "opcode": 143,
       "entry": 28185348,
-      "end": 28185354,
+      "end": 28184984,
       "mnemonic": "jmp"
     },
     {
       "opcode": 5,
       "entry": 28185354,
-      "end": 28186601,
+      "end": 28184984,
       "mnemonic": "shr_u32"
     },
     {
       "opcode": 76,
       "entry": 28186601,
-      "end": 28186612,
+      "end": 28184984,
       "mnemonic": "ret_native"
     },
     {
       "opcode": 27,
       "entry": 28186612,
-      "end": 28186640,
+      "end": 28184984,
       "mnemonic": "ld_data_u8"
     },
     {
       "opcode": 39,
       "entry": 28186640,
-      "end": 28186652,
+      "end": 28184984,
       "mnemonic": "imul_u32"
     },
     {
       "opcode": 37,
       "entry": 28186652,
-      "end": 28187456,
+      "end": 28184984,
       "mnemonic": "push_u16"
     },
     {
       "opcode": 1,
       "entry": 28187456,
-      "end": 28187465,
+      "end": 28184984,
       "mnemonic": "ld_u16"
     },
     {
       "opcode": 0,
       "entry": 28187465,
-      "end": 28187476,
+      "end": 28184984,
       "mnemonic": "st_data_u32"
     },
     {
       "opcode": 15,
       "entry": 28187476,
-      "end": 28187518,
+      "end": 28184984,
       "mnemonic": "st_data_u8"
     },
     {
       "opcode": 78,
       "entry": 28187518,
-      "end": 28187528,
+      "end": 28184984,
       "mnemonic": "st_u16"
     },
     {
       "opcode": 111,
       "entry": 28187528,
-      "end": 28187538,
+      "end": 28184984,
       "mnemonic": "st_u8"
     },
     {
       "opcode": 73,
       "entry": 28187538,
-      "end": 28187545,
+      "end": 28184984,
       "mnemonic": "set_sp16"
     },
     {
       "opcode": 118,
       "entry": 28187545,
-      "end": 28187555,
+      "end": 28184984,
       "mnemonic": "st_u16"
     },
     {
       "opcode": 94,
       "entry": 28187555,
-      "end": 28187569,
+      "end": 28184984,
       "mnemonic": "shld"
     },
     {
       "opcode": 31,
       "entry": 28187569,
-      "end": 28187579,
+      "end": 28184984,
       "mnemonic": "ld_u16"
     },
     {
       "opcode": 162,
       "entry": 28187579,
-      "end": 28187643,
+      "end": 28184984,
       "mnemonic": "shl_u32"
     }
   ]
