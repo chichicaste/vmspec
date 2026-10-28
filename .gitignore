@@ -76,3 +76,6 @@ build/
 Thumbs.db
 .DS_Store
 desktop.ini
+
+# VM bytecode blob (analysis input; source-only repo)
+*.bin

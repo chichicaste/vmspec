@@ -39,6 +39,8 @@ def run_pipeline(
     handlers: list[Handler],
     *,
     max_steps: int = 100_000,
+    base_addr: int | None = None,
+    arch: str = "x86",
 ) -> str:
     """Run the full VMSpec pipeline and return the generated ``.slaspec``.
 
@@ -48,6 +50,11 @@ def run_pipeline(
             context variables).
         handlers: Opcode handlers to analyse.
         max_steps: DSE budget per handler (truncated paths become leaves).
+        base_addr: When set, the file is loaded as a raw byte blob (no format
+            detection) mapped at this address via angr's ``blob`` backend;
+            when ``None`` the usual format-aware loading is used.
+        arch: angr architecture name used for raw-blob loading (only relevant
+            when ``base_addr`` is set).
 
     Returns:
         The SLEIGH processor specification as a single string.
@@ -58,7 +65,14 @@ def run_pipeline(
         so that they do not pull every other handler's nodes into their
         constructor.
     """
-    project = angr.Project(binary_path, auto_load_libs=False)
+    if base_addr is not None:
+        project = angr.Project(
+            binary_path,
+            auto_load_libs=False,
+            main_opts={"backend": "blob", "base_addr": base_addr, "arch": arch},
+        )
+    else:
+        project = angr.Project(binary_path, auto_load_libs=False)
 
     built: list[tuple[Handler, GraphNode]] = []
     for handler in handlers:

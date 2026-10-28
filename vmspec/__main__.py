@@ -19,6 +19,16 @@ __all__ = ["main"]
 DEFAULT_MAX_STEPS = 100_000
 
 
+def _parse_addr(value: str) -> int:
+    """argparse type for ``--base-addr``: decimal or ``0x``-prefixed hex."""
+    try:
+        return int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected a decimal or 0x-prefixed hex integer, got {value!r}"
+        ) from exc
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Create the command line parser for ``python -m vmspec``."""
     parser = argparse.ArgumentParser(
@@ -49,6 +59,26 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"maximum DSE steps per handler (default: {DEFAULT_MAX_STEPS})",
     )
+    parser.add_argument(
+        "--base-addr",
+        type=_parse_addr,
+        default=None,
+        metavar="ADDR",
+        help=(
+            "load the binary as a raw byte blob mapped at ADDR (decimal or "
+            "0x-prefixed hex); falls back to the 'base_addr' field of the "
+            "config file"
+        ),
+    )
+    parser.add_argument(
+        "--arch",
+        default=None,
+        metavar="ARCH",
+        help=(
+            "angr architecture used for raw-blob loading (default: 'x86'; "
+            "falls back to the 'arch' field of the config file when omitted)"
+        ),
+    )
     return parser
 
 
@@ -70,8 +100,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_steps <= 0:
         parser.error("--max-steps must be a positive integer")
 
-    vm_state, handlers = load_config(args.config)
-    spec = run_pipeline(args.binary, vm_state, handlers, max_steps=args.max_steps)
+    config = load_config(args.config)
+    base_addr = args.base_addr if args.base_addr is not None else config.base_addr
+    arch = args.arch if args.arch is not None else config.arch
+    spec = run_pipeline(
+        args.binary,
+        config.vm_state,
+        config.handlers,
+        max_steps=args.max_steps,
+        base_addr=base_addr,
+        arch=arch,
+    )
+    handlers = config.handlers
 
     if args.out is not None:
         with open(args.out, "w", encoding="utf-8", newline="\n") as fh:

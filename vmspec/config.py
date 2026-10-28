@@ -11,6 +11,8 @@ with the list of opcode handlers the pipeline should analyse.  Example::
       "regions": [{"name": "ram", "kind": "state", "base": null, "size": null}],
       "context": [],
       "entry": 4198400,
+      "base_addr": "0x1AE1000",
+      "arch": "x86",
       "handlers": [
         {"opcode": 16, "entry": 4198416, "end": 4198496, "mnemonic": "add"}
       ]
@@ -20,28 +22,54 @@ with the list of opcode handlers the pipeline should analyse.  Example::
 carry integer ``entry`` and ``end`` addresses (and an integer ``opcode``).
 Region ``kind`` must be one of the :class:`vmspec.model.RegionKind` values
 (``"code"``, ``"stack"``, ``"state"``, ``"context"``, ``"global"``).
-``bytecode``, when present, is a hex-encoded string.  Only the standard
-library is used.
+``bytecode``, when present, is a hex-encoded string.
+
+The optional ``base_addr`` field (an integer in decimal form or a hex string
+like ``"0x1AE1000"``) requests raw-blob loading: the pipeline maps the binary
+file as a byte blob at that address instead of letting angr detect the file
+format.  ``arch`` (string, default ``"x86"``) names the angr architecture to
+use in that mode.  Only the standard library is used.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from .model import Handler, Region, RegionKind, VMState
 
-__all__ = ["load_config"]
+__all__ = ["Config", "load_config"]
 
 
-def load_config(path: str) -> tuple[VMState, list[Handler]]:
+@dataclass
+class Config:
+    """Parsed pipeline configuration.
+
+    Attributes:
+        vm_state: Layout of the virtual machine state.
+        handlers: Opcode handlers to analyse.
+        base_addr: Base address at which to map the binary as a raw blob in
+            angr (``None`` selects format-detecting binary loading).
+        arch: angr architecture name used when loading a raw blob.
+    """
+
+    vm_state: VMState
+    handlers: list[Handler]
+    base_addr: int | None = None
+    arch: str = "x86"
+
+
+def load_config(path: str) -> Config:
     """Load and validate a VMSpec pipeline configuration file.
 
     Args:
         path: Path of the JSON configuration file (see module docstring).
 
     Returns:
-        A ``(VMState, list[Handler])`` pair ready to be fed to
+        A :class:`Config` containing the :class:`VMState`, the handler list
+        and the optional raw-blob loading parameters (``base_addr`` and
+        ``arch``), ready to be fed to
         :func:`vmspec.pipeline.run_pipeline`.
 
     Raises:
@@ -83,7 +111,12 @@ def load_config(path: str) -> tuple[VMState, list[Handler]]:
         entry=_parse_optional_int(raw.get("entry"), "entry"),
         bytecode=_parse_bytecode(raw.get("bytecode")),
     )
-    return vm_state, _parse_handlers(raw)
+    return Config(
+        vm_state=vm_state,
+        handlers=_parse_handlers(raw),
+        base_addr=_parse_base_addr(raw.get("base_addr")),
+        arch=_parse_arch(raw.get("arch")),
+    )
 
 
 def _parse_regions(raw_regions: Any) -> list[Region]:
@@ -157,6 +190,49 @@ def _parse_optional_int(value: Any, where: str) -> int | None:
         return None
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"config field '{where}' must be an integer or null, got {value!r}")
+    return value
+
+
+def _parse_base_addr(value: Any) -> int | None:
+    """Parse the optional raw-blob mapping address ``base_addr``.
+
+    Accepted forms: ``null``, a positive decimal integer (e.g. ``28185088``)
+    or a string parsable with ``int(x, 0)`` so both ``"0x1AE1000"`` and
+    ``"28185088"`` are valid.
+    """
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        address = value
+    elif isinstance(value, str):
+        try:
+            address = int(value, 0)
+        except ValueError as exc:
+            raise ValueError(
+                "config field 'base_addr' must be a decimal integer or a hex "
+                f"(0x-prefixed) string, got {value!r}"
+            ) from exc
+    else:
+        raise ValueError(
+            "config field 'base_addr' must be a decimal integer, a hex string "
+            f"or null, got {type(value).__name__}"
+        )
+    if address <= 0:
+        raise ValueError(
+            f"config field 'base_addr' must be a positive address, got {value!r}"
+        )
+    return address
+
+
+def _parse_arch(value: Any) -> str:
+    """Parse the optional angr architecture name (default ``"x86"``)."""
+    if value is None:
+        return "x86"
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            "config field 'arch' must be a non-empty string (e.g. 'x86'), got "
+            f"{value!r}"
+        )
     return value
 
 
