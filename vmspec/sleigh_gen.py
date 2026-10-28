@@ -84,6 +84,8 @@ class _Render:
 
     def render(self, expr: Any) -> str:
         """Render an opaque expression as a SLEIGH operand placeholder."""
+        if hasattr(expr, "op") and hasattr(expr, "args"):
+            return self.render_ast(expr)
         if expr is None:
             return "0x0"
         if isinstance(expr, bool):
@@ -106,6 +108,66 @@ class _Render:
         sym = self.fresh_sym()
         self.vars[id(expr)] = sym
         return sym
+
+    def render_ast(self, ast: Any) -> str:
+        """Translate a claripy AST into a SLEIGH expression string.
+
+        Constants, symbolic variables, and the arithmetic / bit-manipulation
+        operators are mapped to SLEIGH's C-like expression syntax (which the
+        SLEIGH compiler lowers to P-Code). Ops without a direct equivalent
+        fall back to a fresh placeholder.
+        """
+        op = ast.op
+        args = ast.args
+
+        if op == "BVV":
+            return f"0x{args[0]:X}"
+        if op == "BVS":
+            return self.var_name(ast)
+        if op == "BoolV":
+            return "0x1" if args[0] else "0x0"
+
+        binary = {
+            "__add__": "+", "__sub__": "-", "__mul__": "*",
+            "__and__": "&", "__or__": "|", "__xor__": "^",
+            "__lshift__": "<<", "__rshift__": ">>", "LShR": ">>",
+            "__eq__": "==", "__ne__": "!=", "__lt__": "<", "__le__": "<=",
+            "__gt__": ">", "__ge__": ">=", "SLT": "<", "SLE": "<=",
+        }
+        if op in binary:
+            sym = binary[op]
+            return f"({self.render_ast(args[0])} {sym} {self.render_ast(args[1])})"
+
+        if op == "__invert__":
+            return f"(~{self.render_ast(args[0])})"
+        if op == "__neg__":
+            return f"(-{self.render_ast(args[0])})"
+
+        if op == "Concat":
+            hi, lo = args[0], args[1]
+            return f"(({self.render_ast(hi)} << {lo.size()}) | {self.render_ast(lo)})"
+        if op == "Extract":
+            hi, lo = args[0], args[1]
+            x = self.render_ast(args[2])
+            mask = (1 << (hi - lo + 1)) - 1
+            return f"(({x} >> {lo}) & 0x{mask:X})"
+        if op in ("ZeroExt", "SignExt"):
+            return self.render_ast(args[1])
+        if op == "If":
+            c = self.render_ast(args[0])
+            t = self.render_ast(args[1])
+            e = self.render_ast(args[2])
+            return f"(({c}) ? ({t}) : ({e}))"
+        if op in ("RotateLeft", "RotateRight"):
+            x = self.render_ast(args[0])
+            n = self.render_ast(args[1])
+            b = ast.size()
+            mask = (1 << b) - 1
+            if op == "RotateLeft":
+                return f"((( {x} << {n}) | ({x} >> ({b} - {n}))) & 0x{mask:X})"
+            return f"((( {x} >> {n}) | ({x} << ({b} - {n}))) & 0x{mask:X})"
+
+        return self.fresh_sym()
 
 
 def _label(raw: str) -> str:
