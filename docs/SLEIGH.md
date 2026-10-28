@@ -84,6 +84,18 @@ constructor becomes a NOP).
 }
 ```
 
+To mark a constructor as **unimplemented** (an `UNIMPLEMENTED` p-code op instead
+of a NOP), use the `unimpl` keyword *in place of* the `{ ... }` block — no
+braces, no semicolon; it follows the optional disassembly action:
+
+```sleigh
+:op_00 is byte = 0x48 + key - 1 [ key = key - 0x00; globalset(inst_next, key); ] unimpl
+```
+
+Writing `unimpl;` inside a `{ }` block is rejected
+(`no viable alternative on SEMI`). This is how the deterministic skeleton
+(isa_recovery phase 1) stubs every constructor.
+
 ## 7. Bit-pattern (constraint) expressions
 
 A constraint is `<symbol> = <expression>` — the **left-hand side must be a

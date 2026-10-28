@@ -28,7 +28,7 @@ from typing import Any, Iterator
 
 from vmspec.model import Call, GraphNode, Handler, MemAccess, RegionKind, VMState
 
-__all__ = ["generate_sleigh"]
+__all__ = ["encrypt_const", "emit_header", "generate_sleigh", "label"]
 
 # The address space in which each region kind lives.
 _SPACE_BY_KIND: dict[RegionKind, str] = {
@@ -114,7 +114,7 @@ _PCODE_ARITY: dict[str, int] = {
 _CONTEXT_REG_NAME = "contextreg"
 
 
-def _encrypt_const(opcode: int) -> int:
+def encrypt_const(opcode: int) -> int:
     """Return the constant ``C`` such that ``encrypt(op, key) = C + key - 1``."""
     inv = (0xFF ^ opcode) & 0xFF
     x = (inv + 0x85) & 0xFF
@@ -212,7 +212,7 @@ class _Render:
         return "0x0:4"
 
 
-def _label(raw: str) -> str:
+def label(raw: str) -> str:
     """Sanitise *raw* into a valid SLEIGH label."""
     out = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in raw)
     if not out or out[0].isdigit():
@@ -342,6 +342,43 @@ def _opcode_pattern(opcode: int) -> str:
     )
 
 
+def emit_header(lines: list[str], vm_state: VMState) -> None:
+    """Emit the structural parts of a SLEIGH spec into *lines*.
+
+    Covers the endianness/alignment, the address spaces, the instruction token
+    (the single encrypted opcode byte), the VM register file (VPC/VSP) and the
+    rolling-key context variable.  The caller is responsible for the leading
+    comment block; this emits from ``define endian`` onward and leaves a blank
+    line after the context block.
+    """
+    lines.append("define endian=little;")
+    lines.append("define alignment=1;")
+    lines.append("")
+
+    # Address spaces: memory (ram) and the VM register file.
+    lines.append("define space ram type=ram_space size=4 default;")
+    lines.append("define space register type=register_space size=4;")
+    lines.append("")
+
+    # Instruction token: the encrypted opcode byte.
+    lines.append("define token instr(8)")
+    lines.append("  byte=(0,7)")
+    lines.append(";")
+    lines.append("")
+
+    # VM registers (abstract state): the virtual program counter and stack
+    # pointer. The rolling key is a context variable on the context register.
+    vm_regs = [vm_state.vpc]
+    if vm_state.vsp is not None:
+        vm_regs.append(vm_state.vsp)
+    lines.append(f"define register offset=0x0 size=4 [ {' '.join(vm_regs)} ];")
+    lines.append(f"define register offset=0x2000 size=4 {_CONTEXT_REG_NAME};")
+    lines.append(f"define context {_CONTEXT_REG_NAME}")
+    lines.append("  key=(0,7)")
+    lines.append("  ;")
+    lines.append("")
+
+
 def generate_sleigh(
     graph: GraphNode,
     vm_state: VMState,
@@ -376,32 +413,7 @@ def generate_sleigh(
     lines.append("# Pipeline: DSE -> state tree -> state graph -> SLEIGH")
     lines.append("# Reference: arXiv:2610.29566")
     lines.append("")
-    lines.append("define endian=little;")
-    lines.append("define alignment=1;")
-    lines.append("")
-
-    # Address spaces: memory (ram) and the VM register file.
-    lines.append("define space ram type=ram_space size=4 default;")
-    lines.append("define space register type=register_space size=4;")
-    lines.append("")
-
-    # Instruction token: the encrypted opcode byte.
-    lines.append("define token instr(8)")
-    lines.append("  byte=(0,7)")
-    lines.append(";")
-    lines.append("")
-
-    # VM registers (abstract state): the virtual program counter and stack
-    # pointer. The rolling key is a context variable on the context register.
-    vm_regs = [vm_state.vpc]
-    if vm_state.vsp is not None:
-        vm_regs.append(vm_state.vsp)
-    lines.append(f"define register offset=0x0 size=4 [ {' '.join(vm_regs)} ];")
-    lines.append(f"define register offset=0x2000 size=4 {_CONTEXT_REG_NAME};")
-    lines.append(f"define context {_CONTEXT_REG_NAME}")
-    lines.append("  key=(0,7)")
-    lines.append("  ;")
-    lines.append("")
+    emit_header(lines, vm_state)
 
     # Handler constructors.
     r = _Render(reg_names=frozenset(reg_names))
@@ -422,7 +434,7 @@ def generate_sleigh(
         """Emit one constructor: pattern ``byte = C + key - 1`` and the
         rolling-key update ``key -= opcode``."""
         mnemonic = handler.mnemonic if handler is not None else ""
-        base = _label(mnemonic) if mnemonic else f"op_{opcode:02X}"
+        base = label(mnemonic) if mnemonic else f"op_{opcode:02X}"
         name, k = base, 1
         while name in used_labels:
             name = f"{base}_{k}"
@@ -435,7 +447,7 @@ def generate_sleigh(
             )
         else:
             lines.append(f"# opcode=0x{opcode:02X} (unanalysed handler)")
-        c = _encrypt_const(opcode)
+        c = encrypt_const(opcode)
         lines.append(
             f":{name} is byte = 0x{c:X} + key - 1 "
             f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] {{"
