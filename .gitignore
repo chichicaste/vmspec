@@ -1,0 +1,78 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ===== C / C++ =====
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dll
+*.lib
+*.exe
+*.dylib
+*.pdb
+
+# ===== Java / Ghidra =====
+*.class
+*.war
+out/
+bin/
+.gradle/
+build/
+
+# ===== Ghidra artifacts (compiled specs, projects, DBs) =====
+*.sla        # compiled SLEIGH spec (source is .slaspec)
+*.gpr        # Ghidra project
+*.rep        # Ghidra repository
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.gzf
+*.jdb
+
+# ===== Binaries / dumps (source-only repo) =====
+*.bin
+*.raw
+*.dump
+*.ihex
+
+# ===== Caches / tooling =====
+.cache/
+.opencode/
+.claude/
+.aider/
+.cursor/
+*.log
+*.tmp
+*.swp
+*~
+.idea/
+.vscode/
+.vs/
+
+# ===== OS =====
+Thumbs.db
+.DS_Store
+desktop.ini
