@@ -53,6 +53,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "(default: the config's base_addr, else 0x1AE1000)"
         ),
     )
+    parser.add_argument(
+        "--mode",
+        choices=["rolling", "clear"],
+        default="rolling",
+        help=(
+            "opcode encoding the constructors match: 'rolling' (encrypted, "
+            "rolling key) or 'clear' (decrypted, constant byte=opcode)"
+        ),
+    )
     return parser
 
 
@@ -71,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         config.handlers,
         config.dispatch_table,
         engine=engine,
+        mode=args.mode,
     )
 
     if args.out is not None:

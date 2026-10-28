@@ -69,18 +69,31 @@ def generate_skeleton(
     dispatch_table: list[int] | None,
     *,
     engine: int = DEFAULT_ENGINE,
+    mode: str = "rolling",
 ) -> tuple[str, list[ConstructorInfo]]:
     """Generate a deterministic SLEIGH skeleton and its constructor metadata.
 
     One constructor is emitted per opcode index (0..255) when *dispatch_table*
     is given, or per analysed handler using its canonical opcode otherwise.
-    Each constructor matches the encrypted opcode byte with the rolling-key
-    constraint ``byte = C + key - 1``, commits the key update
-    ``key = key - opcode``, and ends in ``unimpl``.
+    Each constructor ends in ``unimpl``.
+
+    ``mode`` selects the opcode encoding the constructor matches:
+
+    * ``"rolling"`` (default): the encrypted opcode byte, matched with the
+      rolling-key constraint ``byte = C + key - 1`` and the key update
+      ``key = key - opcode`` (paper-faithful; see ``docs/fallthrough-critique.md``
+      for why Ghidra cannot chain fall-through across this).
+    * ``"clear"``: the decrypted opcode byte, matched with a constant
+      ``byte = opcode`` and no context -- the working path for the
+      decrypt-to-clear image (``tools/decrypt_bytecode.py``).
 
     Returns ``(spec, infos)``: the ``.slaspec`` text and the per-constructor
     metadata for the phase-2 semantics pass.
     """
+    if mode not in ("rolling", "clear"):
+        raise ValueError(f"mode must be 'rolling' or 'clear', got {mode!r}")
+    clear = mode == "clear"
+
     analyzed_by_entry: dict[int, Handler] = {
         handler.entry: handler for handler in handlers
     }
@@ -89,9 +102,13 @@ def generate_skeleton(
     lines.append("# VMSpec deterministic skeleton (.slaspec)")
     lines.append("# Phase 1 (isa_recovery): structure + unimpl stubs.")
     lines.append("# Phase 2 fills in each constructor's P-Code semantics.")
+    if clear:
+        lines.append("# Encoding: clear (constant byte = opcode, no context).")
+    else:
+        lines.append("# Encoding: encrypted opcode via the rolling key.")
     lines.append("# Reference: arXiv:2610.29566")
     lines.append("")
-    emit_header(lines, vm_state)
+    emit_header(lines, vm_state, with_context=not clear)
 
     infos: list[ConstructorInfo] = []
 
@@ -110,10 +127,13 @@ def generate_skeleton(
         else:
             lines.append(f"# opcode=0x{opcode:02X} (unanalysed handler)")
 
-        lines.append(
-            f":{name} is byte = 0x{c:X} + key - 1 "
-            f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] unimpl"
-        )
+        if clear:
+            lines.append(f":{name} is byte = 0x{opcode:02X} unimpl")
+        else:
+            lines.append(
+                f":{name} is byte = 0x{c:X} + key - 1 "
+                f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] unimpl"
+            )
         lines.append("")
         infos.append(
             ConstructorInfo(

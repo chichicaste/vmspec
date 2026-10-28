@@ -342,14 +342,15 @@ def _opcode_pattern(opcode: int) -> str:
     )
 
 
-def emit_header(lines: list[str], vm_state: VMState) -> None:
+def emit_header(lines: list[str], vm_state: VMState, *, with_context: bool = True) -> None:
     """Emit the structural parts of a SLEIGH spec into *lines*.
 
     Covers the endianness/alignment, the address spaces, the instruction token
-    (the single encrypted opcode byte), the VM register file (VPC/VSP) and the
-    rolling-key context variable.  The caller is responsible for the leading
-    comment block; this emits from ``define endian`` onward and leaves a blank
-    line after the context block.
+    (the single opcode byte), the VM register file (VPC/VSP) and -- when
+    *with_context* is true -- the rolling-key context variable.  The caller is
+    responsible for the leading comment block; this emits from ``define endian``
+    onward and leaves a blank line after the context block (or the register
+    block when there is no context).
     """
     lines.append("define endian=little;")
     lines.append("define alignment=1;")
@@ -360,22 +361,24 @@ def emit_header(lines: list[str], vm_state: VMState) -> None:
     lines.append("define space register type=register_space size=4;")
     lines.append("")
 
-    # Instruction token: the encrypted opcode byte.
+    # Instruction token: the (encrypted or clear) opcode byte.
     lines.append("define token instr(8)")
     lines.append("  byte=(0,7)")
     lines.append(";")
     lines.append("")
 
     # VM registers (abstract state): the virtual program counter and stack
-    # pointer. The rolling key is a context variable on the context register.
+    # pointer. The rolling key (when used) is a context variable on a context
+    # register.
     vm_regs = [vm_state.vpc]
     if vm_state.vsp is not None:
         vm_regs.append(vm_state.vsp)
     lines.append(f"define register offset=0x0 size=4 [ {' '.join(vm_regs)} ];")
-    lines.append(f"define register offset=0x2000 size=4 {_CONTEXT_REG_NAME};")
-    lines.append(f"define context {_CONTEXT_REG_NAME}")
-    lines.append("  key=(0,7)")
-    lines.append("  ;")
+    if with_context:
+        lines.append(f"define register offset=0x2000 size=4 {_CONTEXT_REG_NAME};")
+        lines.append(f"define context {_CONTEXT_REG_NAME}")
+        lines.append("  key=(0,7)")
+        lines.append("  ;")
     lines.append("")
 
 
