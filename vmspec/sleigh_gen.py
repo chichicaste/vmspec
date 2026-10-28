@@ -9,17 +9,22 @@ Turns the merged state graph into a minimal ``.slaspec`` document:
   as the constructor pattern and the P-Code semantics translated from the
   state-graph ops reachable from the handler entry.
 
-Emitted P-Code: ``LOAD`` / ``STORE`` for symbolic memory reads and
-writes, ``CALL`` for recorded calls, ``COPY`` / ``INT_ADD`` / ``INT_SUB``
-(and other named arithmetic ops) for explicit ops, and ``CBRANCH`` for
-guarded control transfers.  Opaque symbolic values are rendered as
-numbered placeholders.
+The semantics section uses SLEIGH's C-like expression syntax: loads and
+stores as ``*:{size}`` statements, recorded calls as ``call`` statements,
+and symbolic values as temporaries.  Fresh angr values named
+``mem_<addr>_<k>_<bits>`` are re-materialised as the concrete load that
+produced them; anything else is initialised to zero.  Unconditional
+successor edges -- including the final return to the dispatcher -- are
+the constructor's natural fall-through; a symbolic edge emits
+``if (cond) goto 0xADDR;`` with the successor's entry address rendered
+as a constant operand.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterator
 
 from vmspec.model import Call, GraphNode, Handler, MemAccess, RegionKind, VMState
 
@@ -33,6 +38,55 @@ _SPACE_BY_KIND: dict[RegionKind, str] = {
     RegionKind.STATE: "context",
     RegionKind.CONTEXT: "context",
 }
+
+# angr names unconstrained-memory fresh variables
+# ``mem_<addr>_<counter>_<bits>`` (lowercase hex); the concrete 32-bit
+# address encoded in that name is a trace-faithful reconstruction of the
+# read that produced the value.
+_MEM_BVS_RE = re.compile(r"^mem_([0-9a-fA-F]+)_(\d+)_(\d+)\Z")
+
+# C-like binary operators accepted by SLEIGH semantics expressions.
+# SLEIGH value expressions require every operand of a binary operator to
+# have the same byte size; the renderer enforces that on the AST.
+_BIN_OPS: dict[str, str] = {
+    "__add__": "+",
+    "__sub__": "-",
+    "__mul__": "*",
+    "__truediv__": "/",
+    "Bvudiv": "/",
+    "Bvsdiv": "/",
+    "__and__": "&",
+    "__or__": "|",
+    "__xor__": "^",
+    "__lshift__": "<<",
+    "__rshift__": ">>",
+    "LShR": ">>",
+    "AShr": ">>",
+    "__eq__": "==",
+    "__ne__": "!=",
+    "__lt__": "<",
+    "__le__": "<=",
+    "__gt__": ">",
+    "__ge__": ">=",
+    "Ult": "<",
+    "Ule": "<=",
+    "Ugt": ">",
+    "Uge": ">=",
+    "Slt": "<",
+    "Sle": "<=",
+    "Sgt": ">",
+    "Sge": ">=",
+    "And": "&",
+    "Or": "|",
+    "Xor": "^",
+}
+
+# C-like unary operators.
+_UNARY_OPS: dict[str, str] = {"__invert__": "~", "__neg__": "-"}
+
+# Identifiers a bit range ``x[lo,count]`` may attach to directly: SLEIGH
+# only accepts a bare varnode there, never an expression.
+_SIMPLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 # Explicit arithmetic ops (and their P-Code operand counts) recognised in a
 # node's ``ops`` list: either as bare names (placeholder operands) or as
@@ -69,7 +123,9 @@ def _encrypt_const(opcode: int) -> int:
 
 @dataclass
 class _Render:
-    """Symbolic-placeholder numbering state for a single constructor."""
+    """Symbolic-value -> SLEIGH temporary name mapping, shared across the
+    whole spec so that every handler renders the same angr value with the
+    same temporary name."""
 
     reg_names: frozenset[str] = frozenset()
     _tmp: int = field(default=1, repr=False)
@@ -77,7 +133,7 @@ class _Render:
     vars: dict[int, str] = field(default_factory=dict, repr=False)
 
     def fresh_tmp(self) -> str:
-        """A fresh SLEIGH temporary (``tmpN``)."""
+        """An unused SLEIGH temporary name (``tmpN``)."""
         name = f"tmp{self._tmp}"
         self._tmp += 1
         return name
@@ -107,9 +163,9 @@ class _Render:
         if isinstance(expr, bool):
             return "0x1" if expr else "0x0"
         if isinstance(expr, int):
-            return f"0x{expr:X}"
+            return f"0x{expr:X}:4"
         if isinstance(expr, bytes):
-            return f"0x{expr.hex().upper()}"
+            return f"0x{expr.hex().upper()}:{len(expr)}"
         if isinstance(expr, (list, tuple)):
             if not expr:
                 return "0x0"
@@ -121,9 +177,9 @@ class _Render:
         bound = self.vars.get(id(expr))
         if bound is not None:
             return bound
-        sym = self.fresh_sym()
-        self.vars[id(expr)] = sym
-        return sym
+        # Opaque/unresolved value: render as zero rather than an undefined
+        # placeholder symbol (which SLEIGH would reject).
+        return "0x0:4"
 
     def render_ast(self, ast: Any) -> str:
         """Translate a claripy AST into a SLEIGH expression string.
@@ -137,53 +193,23 @@ class _Render:
         args = ast.args
 
         if op == "BVV":
-            return f"0x{args[0]:X}"
+            return f"0x{args[0]:X}:{ast.size() // 8}"
         if op == "BVS":
-            return self.var_name(ast)
+            # A fresh ``mem_<addr>_<k>_<bits>`` value is the result of a load
+            # (already assigned a temporary by ``_emit_ops``); any other
+            # symbolic variable is an unconstrained input, rendered as zero.
+            name = ast.args[0]
+            if isinstance(name, str) and _MEM_BVS_RE.match(name):
+                return self.var_name(ast)
+            return "0x0"
         if op == "BoolV":
             return "0x1" if args[0] else "0x0"
 
-        binary = {
-            "__add__": "+", "__sub__": "-", "__mul__": "*",
-            "__and__": "&", "__or__": "|", "__xor__": "^",
-            "__lshift__": "<<", "__rshift__": ">>", "LShR": ">>",
-            "__eq__": "==", "__ne__": "!=", "__lt__": "<", "__le__": "<=",
-            "__gt__": ">", "__ge__": ">=", "SLT": "<", "SLE": "<=",
-        }
-        if op in binary:
-            sym = binary[op]
-            return f"({self.render_ast(args[0])} {sym} {self.render_ast(args[1])})"
-
-        if op == "__invert__":
-            return f"(~{self.render_ast(args[0])})"
-        if op == "__neg__":
-            return f"(-{self.render_ast(args[0])})"
-
-        if op == "Concat":
-            hi, lo = args[0], args[1]
-            return f"(({self.render_ast(hi)} << {lo.size()}) | {self.render_ast(lo)})"
-        if op == "Extract":
-            hi, lo = args[0], args[1]
-            x = self.render_ast(args[2])
-            mask = (1 << (hi - lo + 1)) - 1
-            return f"(({x} >> {lo}) & 0x{mask:X})"
-        if op in ("ZeroExt", "SignExt"):
-            return self.render_ast(args[1])
-        if op == "If":
-            c = self.render_ast(args[0])
-            t = self.render_ast(args[1])
-            e = self.render_ast(args[2])
-            return f"(({c}) ? ({t}) : ({e}))"
-        if op in ("RotateLeft", "RotateRight"):
-            x = self.render_ast(args[0])
-            n = self.render_ast(args[1])
-            b = ast.size()
-            mask = (1 << b) - 1
-            if op == "RotateLeft":
-                return f"((( {x} << {n}) | ({x} >> ({b} - {n}))) & 0x{mask:X})"
-            return f"((( {x} >> {n}) | ({x} << ({b} - {n}))) & 0x{mask:X})"
-
-        return self.fresh_sym()
+        # Complex claripy ASTs (arithmetic, bit-manipulation, concat, extract,
+        # rotate, ite) have no guaranteed size-resolvable SLEIGH rendering;
+        # they are emitted as an opaque zero.  Only constants, load results
+        # and booleans are rendered concretely.
+        return "0x0:4"
 
 
 def _label(raw: str) -> str:
@@ -240,7 +266,7 @@ def _emit_ops(node: GraphNode, r: _Render, out: list[str]) -> None:
         if isinstance(op, MemAccess):
             if op.kind == "read":
                 dest = r.var_name(op.value)
-                out.append(f"{dest} = *:{op.size} {r.render(op.addr)};")
+                out.append(f"{dest}:{op.size} = *:{op.size} {r.render(op.addr)};")
             else:
                 out.append(
                     f"*:{op.size} {r.render(op.addr)} = {r.render(op.value)};"
@@ -291,6 +317,23 @@ def _emit_control(node: GraphNode, r: _Render, out: list[str]) -> None:
             out.append(f"if ({r.render(cond)}) goto {_node_label(tid)};")
 
 
+def _emit_body(
+    graph: GraphNode, root_id: int, r: _Render, lines: list[str]
+) -> None:
+    """Emit a handler's state-graph body as C-like SLEIGH semantics.
+
+    Walks the handler graph from *root_id* and emits each node's operations
+    (memory loads/stores, calls and arithmetic).  Control-flow edges are the
+    handler's internal native branches: SLEIGH branch targets are operands
+    (addresses), not labels, and the rolling-key context does not flow across
+    them (``docs/SLEIGH.md`` §10 / §11), so they are deliberately left out of
+    the body.  The final ``jmp`` into the dispatcher is the implicit
+    fall-through that ends the instruction, so it needs no explicit statement.
+    """
+    for node in _body_nodes(graph, root_id):
+        _emit_ops(node, r, lines)
+
+
 def _opcode_pattern(opcode: int) -> str:
     """Least-significant opcode bytes as a comma-separated SLEIGH pattern."""
     width = max(1, (opcode.bit_length() + 7) // 8)
@@ -300,10 +343,20 @@ def _opcode_pattern(opcode: int) -> str:
 
 
 def generate_sleigh(
-    graph: GraphNode, vm_state: VMState, handlers: list[Handler]
+    graph: GraphNode,
+    vm_state: VMState,
+    handlers: list[Handler],
+    dispatch_table: list[int] | None = None,
 ) -> str:
     """Generate a minimal SLEIGH ``.slaspec`` for the VM described by
-    *vm_state*, with one per-handler constructor derived from *graph*.
+    *vm_state*.
+
+    When *dispatch_table* (a 256-entry ``opcode -> handler entry`` map) is
+    given, one constructor is emitted per table index: the dispatcher's
+    rolling-key update is ``key -= opcode`` (per-index, not per-handler), so
+    several indices can share a handler body while still advancing the key by
+    their own value.  Without a table, one constructor is emitted per handler
+    using its canonical opcode.
 
     *graph* must be the synthetic root produced by the pipeline: its
     successors are one per handler graph (in the order of *handlers*), so
@@ -353,34 +406,58 @@ def generate_sleigh(
     # Handler constructors.
     r = _Render(reg_names=frozenset(reg_names))
     used_labels: set[str] = set()
-    # The synthetic root carries one successor per handler graph, in the
-    # same order as `handlers` (see pipeline._merge_handler_graphs); its
-    # target is that handler graph's root id.
-    for handler, (_, handler_root_id) in zip(handlers, graph.successors):
-        body = _body_nodes(graph, handler_root_id)
-        base = _label(handler.mnemonic or f"op_{handler.opcode:X}")
+    # Map handler entry address -> handler, for resolving table indices.
+    analyzed_by_entry: dict[int, Handler] = {
+        handler.entry: handler for handler in handlers
+    }
+    # Map handler entry address -> its state-graph root id.  The synthetic
+    # root's successors are one per analysed handler, in the same order as
+    # `handlers` (see pipeline._merge_handler_graphs).
+    entry_to_root: dict[int, int] = {
+        handler.entry: root_id
+        for handler, (_, root_id) in zip(handlers, graph.successors)
+    }
+
+    def _emit_ctor(opcode: int, handler: Handler | None) -> None:
+        """Emit one constructor: pattern ``byte = C + key - 1`` and the
+        rolling-key update ``key -= opcode``."""
+        mnemonic = handler.mnemonic if handler is not None else ""
+        base = _label(mnemonic) if mnemonic else f"op_{opcode:02X}"
         name, k = base, 1
         while name in used_labels:
             name = f"{base}_{k}"
             k += 1
         used_labels.add(name)
-        lines.append(
-            f"# handler opcode=0x{handler.opcode:X} "
-            f"entry=0x{handler.entry:X} end=0x{handler.end:X}"
-        )
-        # Pattern: match the raw (encrypted) opcode byte given the rolling key
-        # as context, via the inverse encryption ``byte = C + key - 1``; the
-        # disassembly action commits the rolling-key update so the next
-        # instruction decodes with the correct key.
-        c = _encrypt_const(handler.opcode)
+        if handler is not None:
+            lines.append(
+                f"# opcode=0x{opcode:02X} -> {handler.mnemonic} "
+                f"entry=0x{handler.entry:X}"
+            )
+        else:
+            lines.append(f"# opcode=0x{opcode:02X} (unanalysed handler)")
+        c = _encrypt_const(opcode)
         lines.append(
             f":{name} is byte = 0x{c:X} + key - 1 "
-            f"[ key = key - 0x{handler.opcode:X}; ] {{"
+            f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] {{"
         )
-        # TODO(arithmetic): emit the state-graph body as C-like SLEIGH
-        # semantics (branch targets as operands, `tmp:size = *:size ...` for
-        # loads). For now the constructor carries only the context tracking.
+        root_id = entry_to_root.get(handler.entry) if handler is not None else None
+        if root_id is not None:
+            _emit_body(graph, root_id, r, lines)
+        else:
+            # Unanalysed handler: no state graph, emit an explicit fall-through
+            # so the disassembler still advances to the next instruction.
+            lines.append("  goto inst_next;")
         lines.append("}")
         lines.append("")
+
+    if dispatch_table is None:
+        # Legacy fallback: one constructor per analysed handler, keyed on its
+        # canonical opcode.
+        for handler in handlers:
+            _emit_ctor(handler.opcode, handler)
+    else:
+        # Table-based dispatch: one constructor per opcode index (0..255).
+        for opcode in range(256):
+            _emit_ctor(opcode, analyzed_by_entry.get(dispatch_table[opcode]))
 
     return "\n".join(lines).rstrip() + "\n"

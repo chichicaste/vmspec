@@ -41,6 +41,7 @@ def run_pipeline(
     max_steps: int = 100_000,
     base_addr: int | None = None,
     arch: str = "x86",
+    dispatch_table: list[int] | None = None,
 ) -> str:
     """Run the full VMSpec pipeline and return the generated ``.slaspec``.
 
@@ -88,7 +89,7 @@ def run_pipeline(
 
     root = _merge_handler_graphs(built)
     analyzed = [handler for handler, _ in built]
-    return generate_sleigh(root, vm_state, analyzed)
+    return generate_sleigh(root, vm_state, analyzed, dispatch_table)
 
 
 def _merge_handler_graphs(built: list[tuple[Handler, GraphNode]]) -> GraphNode:

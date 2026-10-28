@@ -85,20 +85,30 @@ MNEMONICS: dict[int, str] = {
 }
 
 
-def extract_handlers(dbin: bytes) -> list[dict]:
+def extract_handlers(dbin: bytes) -> tuple[list[dict], list[int]]:
     """Enumerate handlers from the dispatch table at ``dbin + TAB_OFF``.
 
-    Returns a list of handler descriptors ``{opcode, entry, end, mnemonic}``
-    (one entry per unique handler offset).  Every handler is native x86 that
-    ends with an absolute ``jmp`` into the shared dispatcher inside the blob,
-    so ``end`` is ``DISPATCHER`` for all handlers and is used by the DSE as
-    the exploration terminator.
+    Returns a tuple ``(handlers, dispatch_table)``:
+
+    * ``handlers`` — one descriptor ``{opcode, entry, end, mnemonic}`` per
+      unique handler offset (the ``opcode`` is the first/canonical table index
+      that maps to that handler);
+    * ``dispatch_table`` — the 256-entry opcode -> handler mapping (each value
+      is the absolute handler entry address), so the SLEIGH generator can emit
+      one constructor per table index: the dispatcher's rolling-key update is
+      ``key -= opcode``, which is per-index, not per-handler.
+
+    Every handler is native x86 that ends with an absolute ``jmp`` into the
+    shared dispatcher inside the blob, so ``end`` is ``DISPATCHER`` for all
+    handlers and is used by the DSE as the exploration terminator.
     """
-    # group opcodes by handler offset
+    # group opcodes by handler offset, and record the full opcode -> entry map
     by_offset: dict[int, list[int]] = {}
+    dispatch: list[int] = []
     for op in range(256):
         raw = struct.unpack_from("<I", dbin, TAB_OFF + op * 4)[0]
         by_offset.setdefault(raw - ENGINE, []).append(op)
+        dispatch.append(raw)  # absolute handler entry address for this opcode
 
     handlers: list[dict] = []
     for off in sorted(by_offset):
@@ -110,7 +120,7 @@ def extract_handlers(dbin: bytes) -> list[dict]:
                 "mnemonic": MNEMONICS.get(off, f"handler_{off:04X}"),
             }
         )
-    return handlers
+    return handlers, dispatch
 
 
 def build_vm_state() -> dict:
@@ -138,7 +148,9 @@ def gen_config(blob_path: str | Path, out_path: str | Path) -> dict:
     """Read the blob and write the config.json; returns the config dict."""
     dbin = Path(blob_path).read_bytes()
     config = build_vm_state()
-    config["handlers"] = extract_handlers(dbin)
+    handlers, dispatch = extract_handlers(dbin)
+    config["handlers"] = handlers
+    config["dispatch_table"] = dispatch
     Path(out_path).write_text(json.dumps(config, indent=2) + "\n")
     return config
 

@@ -58,6 +58,7 @@ class Config:
     handlers: list[Handler]
     base_addr: int | None = None
     arch: str = "x86"
+    dispatch_table: list[int] | None = None
 
 
 def load_config(path: str) -> Config:
@@ -116,6 +117,7 @@ def load_config(path: str) -> Config:
         handlers=_parse_handlers(raw),
         base_addr=_parse_base_addr(raw.get("base_addr")),
         arch=_parse_arch(raw.get("arch")),
+        dispatch_table=_parse_dispatch_table(raw.get("dispatch_table")),
     )
 
 
@@ -234,6 +236,24 @@ def _parse_arch(value: Any) -> str:
             f"{value!r}"
         )
     return value
+
+
+def _parse_dispatch_table(value: Any) -> list[int] | None:
+    """Parse the optional 256-entry dispatch table (opcode -> handler entry)."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != 256:
+        raise ValueError(
+            "config field 'dispatch_table' must be a list of 256 integers "
+            f"or null, got {type(value).__name__} of length "
+            f"{len(value) if isinstance(value, list) else 'n/a'}"
+        )
+    for i, item in enumerate(value):
+        if not isinstance(item, int) or isinstance(item, bool):
+            raise ValueError(
+                f"config field 'dispatch_table[{i}]' must be an integer, got {item!r}"
+            )
+    return list(value)
 
 
 def _parse_handlers(raw: Any) -> list[Handler]:

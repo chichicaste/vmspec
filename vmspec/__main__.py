@@ -110,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=args.max_steps,
         base_addr=base_addr,
         arch=arch,
+        dispatch_table=config.dispatch_table,
     )
     handlers = config.handlers
 

@@ -79,3 +79,17 @@ desktop.ini
 
 # VM bytecode blob (analysis input; source-only repo)
 *.bin
+
+# ===== Debug / probe artifacts (SLEIGH + Ghidra exploration) =====
+/_*.slaspec
+/_*.sla
+/_*.err
+/_*.out
+/_slc.txt
+/_dump*.py
+/_bvs*
+data/vmspec-proc/
+data/DumpDisasm.java
+data/dump_disasm.py
+data/_dump_graph.py
+data/_tbl.py
