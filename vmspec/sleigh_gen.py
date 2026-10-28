@@ -50,6 +50,22 @@ _PCODE_ARITY: dict[str, int] = {
     "INT_SEXT": 2,
 }
 
+# Rolling-key opcode encryption, the inverse of the in-blob dispatcher's
+# decryption. The dispatcher does:
+#   cl = byte - key; cl += 1; cl = ror8(cl, 4); cl -= 0x85; cl = ~cl; key -= cl
+# Solving for ``byte`` (so a constructor can match the raw byte given the
+# rolling key as context) yields ``byte = rol8(~opcode + 0x85, 4) + key - 1``.
+# ``_encrypt_const`` returns the constant ``rol8(~opcode + 0x85, 4)``, so each
+# constructor's constraint is ``byte = C + key - 1`` (VMSpec §5.1 / §5.4).
+_CONTEXT_REG_NAME = "contextreg"
+
+
+def _encrypt_const(opcode: int) -> int:
+    """Return the constant ``C`` such that ``encrypt(op, key) = C + key - 1``."""
+    inv = (0xFF ^ opcode) & 0xFF
+    x = (inv + 0x85) & 0xFF
+    return ((x << 4) | (x >> 4)) & 0xFF  # rol8(x, 4)
+
 
 @dataclass
 class _Render:
@@ -61,8 +77,8 @@ class _Render:
     vars: dict[int, str] = field(default_factory=dict, repr=False)
 
     def fresh_tmp(self) -> str:
-        """A fresh SLEIGH temporary (``#n``)."""
-        name = f"#{self._tmp}"
+        """A fresh SLEIGH temporary (``tmpN``)."""
+        name = f"tmp{self._tmp}"
         self._tmp += 1
         return name
 
@@ -219,18 +235,18 @@ def _body_nodes(graph: GraphNode, start_id: int) -> list[GraphNode]:
 
 
 def _emit_ops(node: GraphNode, r: _Render, out: list[str]) -> None:
-    """Translate a graph node's ops into P-Code lines."""
+    """Translate a graph node's ops into C-like SLEIGH semantics."""
     for op in node.ops:
         if isinstance(op, MemAccess):
             if op.kind == "read":
                 dest = r.var_name(op.value)
-                out.append(f"LOAD:{op.size} {dest},{r.render(op.addr)};")
+                out.append(f"{dest} = *:{op.size} {r.render(op.addr)};")
             else:
                 out.append(
-                    f"STORE:{op.size} {r.render(op.addr)},{r.render(op.value)};"
+                    f"*:{op.size} {r.render(op.addr)} = {r.render(op.value)};"
                 )
         elif isinstance(op, Call):
-            out.append(f"CALL {r.fresh_tmp()},{r.render(op.target)};")
+            out.append(f"call {r.render(op.target)};")
         elif isinstance(op, str) and op in _PCODE_ARITY:
             operands = ",".join(
                 r.fresh_sym() for _ in range(_PCODE_ARITY[op])
@@ -248,6 +264,17 @@ def _emit_ops(node: GraphNode, r: _Render, out: list[str]) -> None:
             out.append(f"# untranslatable op: {op!r}")
 
 
+def _const_bool(cond) -> bool | None:
+    """Return the constant truth value of `cond`, or None if symbolic."""
+    if cond is True:
+        return True
+    if cond is False:
+        return False
+    if hasattr(cond, "op") and cond.op == "BoolV":
+        return bool(cond.args[0])
+    return None
+
+
 def _emit_control(node: GraphNode, r: _Render, out: list[str]) -> None:
     """Emit the control transfer(s) of a graph node."""
     if not node.successors:
@@ -255,8 +282,13 @@ def _emit_control(node: GraphNode, r: _Render, out: list[str]) -> None:
     if len(node.successors) == 1 and node.successors[0][0] is None:
         return  # plain fall-through, nothing to emit
     for cond, tid in node.successors:
-        cond_text = r.render(cond) if cond is not None else r.fresh_sym()
-        out.append(f"CBRANCH {cond_text},{_node_label(tid)};")
+        const = _const_bool(cond)
+        if cond is None or const is True:
+            out.append(f"goto {_node_label(tid)};")
+        elif const is False:
+            continue  # never-taken branch, nothing to emit
+        else:
+            out.append(f"if ({r.render(cond)}) goto {_node_label(tid)};")
 
 
 def _opcode_pattern(opcode: int) -> str:
@@ -287,36 +319,35 @@ def generate_sleigh(
         reg_names.add(region.name)
 
     lines: list[str] = []
-    lines.append("// VMSpec auto-generated processor specification (.slaspec)")
-    lines.append("// Pipeline: DSE -> state tree -> state graph -> SLEIGH")
-    lines.append("// Reference: arXiv:2610.29566")
-    lines.append("version 2.0")
+    lines.append("# VMSpec auto-generated processor specification (.slaspec)")
+    lines.append("# Pipeline: DSE -> state tree -> state graph -> SLEIGH")
+    lines.append("# Reference: arXiv:2610.29566")
     lines.append("")
-    lines.append("#define int 1 0 -1")
-    lines.append("")
-
-    # Address spaces.
-    lines.append('define space ram ( "ram", 0, 4 )')
-    lines.append('define space context ( "context", 0, 4 )')
+    lines.append("define endian=little;")
+    lines.append("define alignment=1;")
     lines.append("")
 
-    # Registers: VPC / VSP, state regions and context variables.
-    def _define_register(name: str, space: str) -> None:
-        if name.lower() in seen_regs:
-            return
-        seen_regs.add(name.lower())
-        display = _label(name).upper()
-        lines.append(f'define register "{name}" ( "{display}" ) belongsTo( {space} )')
-        reg_names.add(name)
+    # Address spaces: memory (ram) and the VM register file.
+    lines.append("define space ram type=ram_space size=4 default;")
+    lines.append("define space register type=register_space size=4;")
+    lines.append("")
 
-    seen_regs: set[str] = set()
-    _define_register(vm_state.vpc, "context")
+    # Instruction token: the encrypted opcode byte.
+    lines.append("define token instr(8)")
+    lines.append("  byte=(0,7)")
+    lines.append(";")
+    lines.append("")
+
+    # VM registers (abstract state): the virtual program counter and stack
+    # pointer. The rolling key is a context variable on the context register.
+    vm_regs = [vm_state.vpc]
     if vm_state.vsp is not None:
-        _define_register(vm_state.vsp, "context")
-    for region in vm_state.regions:
-        _define_register(region.name, _SPACE_BY_KIND[region.kind])
-    for name in vm_state.context:
-        _define_register(name, "context")
+        vm_regs.append(vm_state.vsp)
+    lines.append(f"define register offset=0x0 size=4 [ {' '.join(vm_regs)} ];")
+    lines.append(f"define register offset=0x2000 size=4 {_CONTEXT_REG_NAME};")
+    lines.append(f"define context {_CONTEXT_REG_NAME}")
+    lines.append("  key=(0,7)")
+    lines.append("  ;")
     lines.append("")
 
     # Handler constructors.
@@ -334,19 +365,21 @@ def generate_sleigh(
             k += 1
         used_labels.add(name)
         lines.append(
-            f"// handler opcode=0x{handler.opcode:X} "
+            f"# handler opcode=0x{handler.opcode:X} "
             f"entry=0x{handler.entry:X} end=0x{handler.end:X}"
         )
-        lines.append(f":{name} {_opcode_pattern(handler.opcode)}: {{")
-        use_labels = len(body) > 1 or any(n.successors for n in body)
-        for node in body:
-            if use_labels:
-                lines.append(f"  {_node_label(node.id)}:")
-            node_lines: list[str] = []
-            _emit_ops(node, r, node_lines)
-            _emit_control(node, r, node_lines)
-            for line in node_lines:
-                lines.append(f"  {line}")
+        # Pattern: match the raw (encrypted) opcode byte given the rolling key
+        # as context, via the inverse encryption ``byte = C + key - 1``; the
+        # disassembly action commits the rolling-key update so the next
+        # instruction decodes with the correct key.
+        c = _encrypt_const(handler.opcode)
+        lines.append(
+            f":{name} is byte = 0x{c:X} + key - 1 "
+            f"[ key = key - 0x{handler.opcode:X}; ] {{"
+        )
+        # TODO(arithmetic): emit the state-graph body as C-like SLEIGH
+        # semantics (branch targets as operands, `tmp:size = *:size ...` for
+        # loads). For now the constructor carries only the context tracking.
         lines.append("}")
         lines.append("")
 
