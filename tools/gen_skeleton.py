@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from vmspec.config import load_config
+from vmspec.semantics import handler_pcode
 from vmspec.skeleton import DEFAULT_ENGINE, generate_skeleton
 
 
@@ -62,6 +63,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "rolling key) or 'clear' (decrypted, constant byte=opcode)"
         ),
     )
+    parser.add_argument(
+        "--semantics",
+        action="store_true",
+        help=(
+            "fill in the P-Code semantics from vmspec.semantics (phase 2) "
+            "instead of the unimpl stubs; clear mode only"
+        ),
+    )
     return parser
 
 
@@ -81,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         config.dispatch_table,
         engine=engine,
         mode=args.mode,
+        semantics=handler_pcode if args.semantics else None,
     )
 
     if args.out is not None:

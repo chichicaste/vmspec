@@ -70,6 +70,7 @@ def generate_skeleton(
     *,
     engine: int = DEFAULT_ENGINE,
     mode: str = "rolling",
+    semantics: object | None = None,
 ) -> tuple[str, list[ConstructorInfo]]:
     """Generate a deterministic SLEIGH skeleton and its constructor metadata.
 
@@ -131,12 +132,24 @@ def generate_skeleton(
         op_field = {1: " & op1", 2: " & op2", 4: " & op4"}.get(operand_size, "")
 
         if clear:
-            lines.append(f":{name} is byte = 0x{opcode:02X}{op_field} unimpl")
+            pattern = f"byte = 0x{opcode:02X}{op_field}"
+            action = ""
         else:
-            lines.append(
-                f":{name} is byte = 0x{c:X} + key - 1{op_field} "
-                f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] unimpl"
-            )
+            pattern = f"byte = 0x{c:X} + key - 1{op_field}"
+            action = f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] "
+
+        # phase-2 P-Code body (clear mode only: the operand is already
+        # decrypted, so the semantics read it straight from the operand field).
+        pcode: list[str] | None = None
+        if clear and semantics is not None and handler is not None:
+            pcode = semantics(offset, opcode, operand_size)
+
+        if pcode:
+            lines.append(f":{name} is {pattern} {action}{{")
+            lines.extend(f"  {line}" for line in pcode)
+            lines.append("}")
+        else:
+            lines.append(f":{name} is {pattern} {action}unimpl")
         lines.append("")
         infos.append(
             ConstructorInfo(
