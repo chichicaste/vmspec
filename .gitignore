@@ -85,11 +85,10 @@ desktop.ini
 /_*.sla
 /_*.err
 /_*.out
+/_*.log
 /_slc.txt
 /_dump*.py
 /_bvs*
 data/vmspec-proc/
-data/DumpDisasm.java
-data/dump_disasm.py
-data/_dump_graph.py
-data/_tbl.py
+data/_clear.*
+data/_min.*
