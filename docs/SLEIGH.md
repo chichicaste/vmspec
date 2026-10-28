@@ -235,3 +235,67 @@ tmp:4 = sext(tmp1);
 
 `zext(x)`/`sext(x)` resolve their target size from the assignment target
 (`tmp:4 = sext(tmp1)` → 4 bytes), not from the source.
+
+## 13. EFLAGS (`pushfd`) and control flow (implemented)
+
+The arithmetic handlers terminate with `pushfd`: the x86 EFLAGS of the
+operation land on the VM stack, so the semantics compute the flag word by
+hand over temporaries — SLEIGH's own flag registers are never involved.
+
+**Comparisons produce a 1-byte boolean.** Assigning one directly to a wider
+temporary is rejected (`Size restriction error in table 'instruction'`);
+route it through a 1-byte temporary and `zext` (same pattern as §12):
+
+```sleigh
+cfb:1 = (tmpt < tmpa);
+cf:4  = zext(cfb);
+```
+
+**`if` only accepts `goto`.** `if (cond) cf = 0;` does not parse
+(`missing KEY_GOTO, unexpected IDENTIFIER`), and there are no labels to
+jump to inside a constructor body. A conditional flag value must be
+selected branchless; e.g. the SHL carry (bit `32-sh` of the operand, 0
+when `sh == 0`):
+
+```sleigh
+kn:4   = 0x20:4 - sh;          # 32 - sh, in 1..32
+kcl:4  = kn & 0x1F:4;          # keeps the shift itself in range
+kmsk:4 = 0x1:4 ^ (kn >> 5);    # 0 exactly when sh == 0
+cf:4   = ((eax >> kcl) & 1) & kmsk;
+```
+
+**Parity.** Constructor bodies have no loops; PF (even parity of the low
+byte) is an XOR fold — bit 0 of `r ^ (r>>1) ^ ... ^ (r>>7)` is the
+odd-parity indicator, so `pf = (fold & 1) ^ 1`.
+
+**Bitwise `~` is fine in the semantics** (unlike in constraint patterns,
+§7): `a:4 = ~tmpa;`.
+
+**Indirect jump.** `goto [tmp];` — the brackets mark the varnode as the
+destination address. Compute the target in a temporary first; the VM's
+`jmp` is `pc = pop(4) + peek(4)`:
+
+```sleigh
+tv:4 = *:4 VSP;
+VSP  = VSP + 4;
+tp:4 = *:4 VSP;
+tt:4 = tv + tp;
+goto [tt];
+```
+
+**Native return (VM exit).** The `ret_native` handler ends in a native
+`ret` whose target is read from the VM stack (after ten 4-byte context
+pops). Model it as a p-code RETURN with that dynamically-read target:
+
+```sleigh
+VSP     = VSP + 40;       # pop ecx/ecx/edi/ebp/eflags/ebx/eax/edx/ebx/esi
+retpc:4 = *:4 VSP;
+VSP     = VSP + 4;
+return [retpc];
+```
+
+`return` terminates flow without disassembling at the target — correct for
+a VM exit whose target is native code outside the bytecode image (in the
+runtime trace it is `0x01AF5FC7`, inside the engine blob but well past the
+bytecode region). `goto [retpc]` would instead try to decode native x86 as
+VM bytecode.

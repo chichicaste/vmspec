@@ -7,9 +7,13 @@ own machine code), expressed over the VM state: the ``VSP`` register, the
 the instruction's operand fields (``op1``/``op2``/``op4``).
 
 Only the handlers exercised by the bytecode program carry a body; the rest
-(including the arithmetic ``add_u32``/``and_not``/``shl_u32``, whose
-``pushfd`` EFLAGS computation is not yet modelled) return ``None`` and keep
-the ``unimpl`` stub.
+return ``None`` and keep the ``unimpl`` stub.
+
+The ``pushfd`` handlers (``add_u32``/``and_not``/``shl_u32``) compute the x86
+EFLAGS word by hand over temporaries — SLEIGH's own flag registers are not
+involved (the VM pushes the flags onto its stack, they never reach a native
+flags register).  See ``docs/SLEIGH.md`` §13 for the syntax constraints this
+respects (1-byte booleans, no ``if`` without ``goto``, XOR-fold parity).
 """
 
 from __future__ import annotations
@@ -82,5 +86,97 @@ def handler_pcode(hoff: int, opcode: int, operand_size: int) -> list[str] | None
             "VSP = VSP - 4;",
             "*:4 VSP = *:4 tmp;",
         ]
-    # arithmetic (pushfd EFLAGS), jmp (0x304), ret_native (0x7E9): unimpl for now.
+    if hoff == 0x16C:  # add_u32: [esp] += pop(4); pushfd
+        return [
+            "tmpb:4 = *:4 VSP;",
+            "VSP = VSP + 4;",
+            "tmpa:4 = *:4 VSP;",
+            "tmpt:4 = tmpa + tmpb;",
+            "*:4 VSP = tmpt;",
+            # x86 EFLAGS of the add (the handler ends with pushfd); the
+            # comparison results are 1-byte booleans, zext'ed by hand.
+            "cfb:1 = (tmpt < tmpa);",
+            "cf:4 = zext(cfb);",
+            "zfb:1 = (tmpt == 0);",
+            "zf:4 = zext(zfb);",
+            "sf:4 = (tmpt >> 31) & 1;",
+            "ofx:4 = (tmpa ^ tmpt) & (tmpb ^ tmpt);",
+            "of:4 = (ofx >> 31) & 1;",
+            "afx:4 = tmpa ^ tmpb ^ tmpt;",
+            "af:4 = (afx >> 4) & 1;",
+            # PF = even parity of the result's low byte: bit 0 of the XOR
+            # fold of the 8 low bits is the odd-parity indicator, invert it.
+            "pfold:4 = tmpt ^ (tmpt >> 1) ^ (tmpt >> 2) ^ (tmpt >> 3) ^ (tmpt >> 4) ^ (tmpt >> 5) ^ (tmpt >> 6) ^ (tmpt >> 7);",
+            "pf:4 = (pfold & 1) ^ 1;",
+            "fl:4 = 0x202:4 | cf | (pf << 2) | (af << 4) | (zf << 6) | (sf << 7) | (of << 11);",
+            "VSP = VSP - 4;",
+            "*:4 VSP = fl;",
+        ]
+    if hoff == 0x2EC:  # and_not: [esp] = ~peek() & ~pop(4); pushfd
+        return [
+            "tmpa:4 = *:4 VSP;",
+            "VSP = VSP + 4;",
+            "a:4 = ~tmpa;",
+            "tmpp:4 = *:4 VSP;",
+            "t:4 = ~tmpp & ~tmpa;",
+            "*:4 VSP = t;",
+            # EFLAGS of the and (CF=OF=AF=0; only PF/ZF/SF are set)
+            "zfb:1 = (t == 0);",
+            "zf:4 = zext(zfb);",
+            "sf:4 = (t >> 31) & 1;",
+            "pfold:4 = t ^ (t >> 1) ^ (t >> 2) ^ (t >> 3) ^ (t >> 4) ^ (t >> 5) ^ (t >> 6) ^ (t >> 7);",
+            "pf:4 = (pfold & 1) ^ 1;",
+            "fl:4 = 0x202:4 | (pf << 2) | (zf << 6) | (sf << 7);",
+            "VSP = VSP - 4;",
+            "*:4 VSP = fl;",
+        ]
+    if hoff == 0xBBB:  # shl_u32: push(pop(4) << (pop(2)&0x1F), 4); pushfd
+        return [
+            "eax:4 = *:4 VSP;",
+            "VSP = VSP + 4;",
+            "cx:2 = *:2 VSP;",
+            "VSP = VSP + 2;",
+            "sh:4 = zext(cx);",
+            "sh = sh & 0x1F:4;",
+            "r:4 = eax << sh;",
+            # CF = the last bit shifted out (bit 32-sh of eax), 0 when sh == 0.
+            # Branchless select (if only accepts goto): kn = 32-sh in 1..32,
+            # kn>>5 is 1 exactly when sh == 0, and kn&31 keeps the shift
+            # itself in range.
+            "kn:4 = 0x20:4 - sh;",
+            "kcl:4 = kn & 0x1F:4;",
+            "kmsk:4 = 0x1:4 ^ (kn >> 5);",
+            "cf:4 = ((eax >> kcl) & 1) & kmsk;",
+            "VSP = VSP - 4;",
+            "*:4 VSP = r;",
+            # EFLAGS of the shl (OF/AF not modelled by the VM; CF from above)
+            "zfb:1 = (r == 0);",
+            "zf:4 = zext(zfb);",
+            "sf:4 = (r >> 31) & 1;",
+            "pfold:4 = r ^ (r >> 1) ^ (r >> 2) ^ (r >> 3) ^ (r >> 4) ^ (r >> 5) ^ (r >> 6) ^ (r >> 7);",
+            "pf:4 = (pfold & 1) ^ 1;",
+            "fl:4 = 0x202:4 | cf | (pf << 2) | (zf << 6) | (sf << 7);",
+            "VSP = VSP - 4;",
+            "*:4 VSP = fl;",
+        ]
+    if hoff == 0x304:  # jmp: pc = pop(4) + peek(4) (indirect jump)
+        return [
+            "tv:4 = *:4 VSP;",
+            "VSP = VSP + 4;",
+            "tp:4 = *:4 VSP;",
+            "tt:4 = tv + tp;",
+            "goto [tt];",
+        ]
+    if hoff == 0x7E9:  # ret_native: restore native context, native ret
+        # The handler is `pop ecx; pop ecx; pop edi; pop ebp; popfd; pop ebx;
+        # pop eax; pop edx; pop ebx; pop esi; ret` — ten dword pops (40
+        # bytes) off the VM stack, then a native ret whose target is the
+        # next stack dword (native code, not VM bytecode; read dynamically).
+        return [
+            "VSP = VSP + 40;",
+            "retpc:4 = *:4 VSP;",
+            "VSP = VSP + 4;",
+            "return [retpc];",
+        ]
+    # remaining handlers (not exercised by the bytecode program): unimpl.
     return None
