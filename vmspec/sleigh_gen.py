@@ -361,14 +361,21 @@ def emit_header(lines: list[str], vm_state: VMState, *, with_context: bool = Tru
     lines.append("define space register type=register_space size=4;")
     lines.append("")
 
-    # Instruction token: the (encrypted or clear) opcode byte followed by up to
-    # 4 operand bytes. op1/op2/op4 select the operand width (1/2/4 bytes); a
-    # constructor references exactly one to consume its operand.
-    lines.append("define token instr(40)")
+    # Instruction token: the (encrypted or clear) opcode byte, plus one token
+    # per operand width. A constructor concatenates its operand token with `;`
+    # so the instruction length is exactly 1 + operand_size bytes (a single
+    # oversized token would force every instruction to its full width).
+    lines.append("define token instr(8)")
     lines.append("  byte=(0,7)")
-    lines.append("  op1=(8,15)")
-    lines.append("  op2=(8,23)")
-    lines.append("  op4=(8,39)")
+    lines.append(";")
+    lines.append("define token data8(8)")
+    lines.append("  op1=(0,7)")
+    lines.append(";")
+    lines.append("define token data16(16)")
+    lines.append("  op2=(0,15)")
+    lines.append(";")
+    lines.append("define token data32(32)")
+    lines.append("  op4=(0,31)")
     lines.append(";")
     lines.append("")
 

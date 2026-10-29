@@ -128,8 +128,9 @@ def generate_skeleton(
         else:
             lines.append(f"# opcode=0x{opcode:02X} (unanalysed handler)")
 
-        # operand field suffix: op1/op2/op4 consume 1/2/4 bytes after the opcode.
-        op_field = {1: " & op1", 2: " & op2", 4: " & op4"}.get(operand_size, "")
+        # operand token suffix: `; op1/op2/op4` concatenate the operand token
+        # (1/2/4 bytes) so the instruction length is exactly 1 + operand_size.
+        op_field = {1: "; op1", 2: "; op2", 4: "; op4"}.get(operand_size, "")
 
         if clear:
             pattern = f"byte = 0x{opcode:02X}{op_field}"

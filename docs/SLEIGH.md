@@ -204,22 +204,32 @@ declares a named temporary.
 
 The skeleton now consumes operand bytes and emits P-Code bodies.
 
-**Operand fields.** Extend the token to cover the opcode + up to 4 operand
-bytes, and declare one field per operand width (they overlap; a constructor
-references exactly one):
+**Operand tokens.** Use one token per operand width and concatenate with `;`
+so the instruction length is exactly 1 + operand_size bytes. A single
+oversized token (e.g. `instr(40)` with overlapping `op1/op2/op4` fields)
+forces *every* instruction to its full 5-byte width -- the disassembler skips
+the intermediate opcodes.
 
 ```sleigh
-define token instr(40)
+define token instr(8)
   byte=(0,7)
-  op1=(8,15)      # 1-byte operand
-  op2=(8,23)      # 2-byte operand
-  op4=(8,39)      # 4-byte operand
 ;
+define token data8(8)
+  op1=(0,7)
+;
+define token data16(16)
+  op2=(0,15)
+;
+define token data32(32)
+  op4=(0,31)
+;
+
+:push_u32 is byte = 0x13; op4 unimpl   # 5 bytes (1 + 4)
+:push_u8  is byte = 0x4B; op1 unimpl   # 2 bytes (1 + 1)
 ```
 
-A field referenced in the pattern *without* a constraint is a "don't care"
-that consumes its bytes: `:op is byte = 0x13 & op4 ...` is a 5-byte
-instruction.  `&` is the pattern combiner, not bitwise-and.
+The `;` operator concatenates the opcode pattern with the operand field, which
+is "don't care" (consumed without a constraint).
 
 **Field in the semantics.** A token field is a varnode in the semantics body;
 its value is the operand bits: `*:4 VSP = op4;`.
