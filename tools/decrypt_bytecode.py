@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Phase-6 MVP: decrypt the VM bytecode to a clear image and emit the clear
-SLEIGH spec (deterministic skeleton + P-Code semantics).
+"""Phase-6: decrypt the full VM bytecode (all segments) to a clear image and
+emit the clear SLEIGH spec (deterministic skeleton + P-Code semantics).
 
 Why this exists
 ---------------
@@ -9,15 +9,19 @@ variable* in the constructor pattern (``byte = C + key - 1``). That is the
 correct paper-level model, but Ghidra's disassembler cannot chain fall-through
 across an opcode-byte constraint that depends on context (see
 ``docs/fallthrough-critique.md``). The working path is: decrypt the opcode and
-operand bytes up-front with a flow-sensitive sweep (:mod:`vmspec.sweep`) and
-emit a clear spec (constant ``byte = opcode`` patterns) via the two-phase
-skeleton (:mod:`vmspec.skeleton` ``mode="clear"`` + :mod:`vmspec.semantics`).
+operand bytes up-front and emit a clear spec (constant ``byte = opcode``
+patterns) via the two-phase skeleton (``mode="clear"`` + ``handler_pcode``).
+
+The full program is followed with :func:`vmspec.vm.run` (the stack-machine
+interpreter): it resolves the ``jmp`` (0x304) target and continues through every
+segment until ``ret_native`` (0x7E9). This covers more than the sweep, which
+stops at the first control-flow handler.
 
 Scope / limitations
 -------------------
-* The sweep stops at control-flow handlers (``jmp`` 0x304 / ``ret_native``
-  0x7E9) because it cannot follow computed targets.
 * Addresses are not relocated (size-preserving rewrite of the same blob).
+* Phase 2 / phase 3 (the re-entrant programs entered via the native stubs at
+  KEY2/KEY3) are not yet followed; this materialises the first entry's segments.
 
 Usage::
 
@@ -28,23 +32,13 @@ from __future__ import annotations
 import sys
 
 from vmspec.config import load_config
-from vmspec.operand import decrypt_operand, handler_key_update
 from vmspec.semantics import handler_pcode
 from vmspec.skeleton import generate_skeleton
-from vmspec.sweep import sweep
+from vmspec.vm import run
 
 ENGINE = 0x1AE1000
 BC_OFF = 0x6575          # bytecode program entry (blob offset)
 INITIAL_KEY = 0x407575   # dispatcher's initial 32-bit rolling key
-
-# handler offset -> operand length (bytes following the encrypted opcode).
-# Mirrors vmspec.vm.OPERAND_LEN.
-OPERAND_LEN: dict[int, int] = {
-    0x00A: 1, 0x038: 2, 0x065: 1, 0x08E: 1, 0x12B: 1,
-    0x14D: 4, 0x7F4: 1, 0x81C: 2, 0xB54: 1,
-}
-
-_CONTROL_FLOW_OFF = frozenset({0x304, 0x7E9})  # handler offsets: jmp / ret_native
 
 
 def main(argv: list[str]) -> int:
@@ -57,28 +51,17 @@ def main(argv: list[str]) -> int:
     dbin = open(blob_path, "rb").read()
     tbl = config.dispatch_table or _load_table(dbin)
 
-    def step(op: int, addr: int, key: int, dbin: bytes):
-        """Decrypt the operand + apply the handler's key update."""
-        hoff = tbl[op] - ENGINE
-        olen = OPERAND_LEN.get(hoff, 0)
-        operand = dbin[addr + 1:addr + 1 + olen]
-        clear = decrypt_operand(hoff, operand, key)
-        next_key = handler_key_update(hoff, clear or b"", key)
-        return addr + 1 + olen, next_key, clear
-
-    # control-flow opcodes = table indices whose handler offset is jmp/ret_native
-    control_flow = frozenset(
-        op for op in range(256) if tbl[op] - ENGINE in _CONTROL_FLOW_OFF
-    )
-    result = sweep(dbin, BC_OFF, INITIAL_KEY, step, control_flow=control_flow)
+    # follow the full program (segments + jmp) with the stack-machine interpreter
+    entry = ENGINE + BC_OFF
+    trace = list(run(dbin, tbl, entry, INITIAL_KEY))
 
     # materialize the clear image (size-preserving: opcode + operands -> clear)
     clear = bytearray(dbin)
-    for addr, op in result.opcode_at.items():
-        clear[addr] = op  # clear opcode
-        operand = result.operand_at.get(addr)
+    for pc, op, _key, operand, olen in trace:
+        off = pc - ENGINE
+        clear[off] = op
         if operand:
-            clear[addr + 1:addr + 1 + len(operand)] = operand
+            clear[off + 1:off + 1 + olen] = operand
 
     open(out_clear, "wb").write(bytes(clear))
 
@@ -93,16 +76,28 @@ def main(argv: list[str]) -> int:
     )
     open(out_spec, "w", encoding="utf-8", newline="\n").write(spec)
 
-    n_operands = sum(1 for o in result.operand_at.values() if o is not None)
-    print(f"decrypted {len(result.opcode_at)} instructions ({result.states} states)")
-    print(f"operands decrypted: {n_operands}")
-    if result.conflicts:
-        print(
-            f"WARNING: {len(result.conflicts)} key conflicts: "
-            f"{[f'0x{a:x}:[0x{k1:08x},0x{k2:08x}]' for a, k1, k2 in result.conflicts[:5]]}"
-        )
+    n_operands = sum(1 for _pc, _op, _k, operand, _o in trace if operand)
+    segments = _segment_breaks(trace)
+    last = trace[-1]
+    print(f"decrypted {len(trace)} instructions ({n_operands} operands)")
+    if segments:
+        print(f"jumps: {segments}")
+    print(f"last: pc=0x{last[0]:X} opcode=0x{last[1]:02X}")
     print(f"wrote {out_clear} + {out_spec} ({len(infos)} constructors)")
     return 0
+
+
+def _segment_breaks(trace: list[tuple]) -> list[str]:
+    """The (from, to) pc pairs where the control flow jumped (not fall-through)."""
+    breaks: list[str] = []
+    prev_pc = None
+    prev_len = 0
+    for pc, _op, _k, _operand, olen in trace:
+        if prev_pc is not None and pc != prev_pc + 1 + prev_len:
+            breaks.append(f"0x{prev_pc:X}->0x{pc:X}")
+        prev_pc = pc
+        prev_len = olen
+    return breaks
 
 
 def _load_table(dbin: bytes) -> list[int]:

@@ -202,8 +202,11 @@ def run(
 ):
     """Execute the VM (fetch + decrypt + handler) and yield the trace.
 
-    Yields ``(pc, opcode, key_before)`` tuples and resolves ``jmp`` targets via
-    the stack. Stops at the native return (0x7E9) or the step bound.
+    Yields ``(pc, opcode, key_before, operand_clear, operand_len)`` tuples and
+    resolves ``jmp`` targets via the stack.  ``pc`` is the absolute bytecode
+    address; ``operand_clear`` is the decrypted operand bytes (or ``None``) and
+    ``operand_len`` its length.  Stops at the native return (0x7E9) or the step
+    bound.
     """
     vm = VM(dbin)
     # initial stack frame (16 dwords at SP0), captured from the runtime
@@ -225,7 +228,7 @@ def run(
         clear = decrypt_operand(hoff, operand, key)
         key = handler_key_update(hoff, clear or b"", key)
 
-        yield pc, op, key_before
+        yield pc, op, key_before, clear, olen
 
         target = handler_effect(hoff, op, clear, vm)
         if target is None:  # ret_native
