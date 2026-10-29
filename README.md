@@ -1,18 +1,30 @@
-# VMSpec
+# VMSpec — VM deobfuscation via automated SLEIGH spec generation
 
-An implementation of the VMSpec approach ([arXiv:2610.29566](https://arxiv.org/abs/2610.29566)): automatically generate a Ghidra SLEIGH processor specification for an obfuscated virtual machine, then use Ghidra to disassemble and lift the VM bytecode.
+An implementation of the **VMSpec** approach
+([arXiv:2610.29566](https://arxiv.org/abs/2610.29566), "A Decompiler-based
+Approach against Virtual Machine Obfuscation", TU Munich — Kilger, Auer,
+Andreas): automatically generate a Ghidra SLEIGH processor specification for an
+obfuscated virtual machine, then use Ghidra to disassemble and lift the VM
+bytecode.
 
-The input is a raw VM blob (native handlers + a 256-entry dispatch table + the encrypted bytecode program). The output is a Ghidra processor module that disassembles the decrypted bytecode.
+The input is a raw VM blob (native handlers + a 256-entry dispatch table + the
+encrypted bytecode program). The output is a Ghidra processor module that
+disassembles the decrypted bytecode. The tooling is VM-agnostic.
 
 ## Pipeline
 
-The implementation follows the paper's stages:
-
 1. **Config + handler enumeration** — `tools/gen_config.py` extracts the VM state (VPC/VSP, regions, context) and the 256-entry dispatch table from the blob.
-2. **DSE** — `vmspec/dse.py` symbolically executes each handler with angr, recording memory accesses and calls (custom memory model, no pointer concretization).
+2. **DSE** — `vmspec/dse.py` symbolically executes each handler with angr, recording memory accesses and calls.
 3. **State graph** — `vmspec/state_graph.py` merges each handler's DSE state tree into a simplified graph.
 4. **SLEIGH generation** — a deterministic skeleton (`vmspec/skeleton.py`) + per-handler P-Code semantics (`vmspec/semantics.py`), compiled with Ghidra's `sleigh` (the isa_recovery two-phase pattern).
 5. **Disassembly** — decrypt the bytecode to a clear image (`tools/decrypt_bytecode.py`), package the processor (`tools/package_proc.py`) and disassemble in Ghidra (`analyzeHeadless`).
+
+## Key techniques (from the paper)
+
+- **Custom memory model** — never concretize symbolic pointers; emit a fresh symbolic variable per read (except read-only memory), so handler semantics stay complete.
+- **Context concretization** — concretize encrypted operands / context to tame path explosion (when active states exceed a threshold).
+- **State-graph simplification** — def-use analysis to drop dead memory ops, then merge equivalent nodes.
+- **Operand identification** — Sharif et al. heuristic: operands sit at small constant offsets from the opcode (reads near the VPC).
 
 ## Key finding: rolling-key vs decrypt-to-clear
 
@@ -75,7 +87,7 @@ vmspec/
 │   └── ApplyContext.java      #   (negative result) pin the rolling key
 ├── docs/
 │   ├── SLEIGH.md              #   Ghidra 12.2 SLEIGH syntax notes
-│   └── fallthrough-critique.md  #   the triple-negative result
+│   └── fallthrough-critique.md  # the triple-negative result
 ├── data/                      # analysis input (config.json) + artifacts
 └── pyproject.toml
 ```
@@ -86,9 +98,12 @@ The target is a stack machine with a per-instruction rolling key. Each opcode is
 
 ## Status
 
-- **Phase 6 (disassembly) is complete**: the clear spec disassembles the full bytecode program (both segments, 148 instructions) in Ghidra, with correct variable-length instruction decoding.
-- **Decompiler (p-code → C)** is a known limitation: `DecompInterface` fails with `Bad decompile address` on the VM's register/space setup (see `ghidra/DumpDecomp.java`).
-- The **rolling-key SLEIGH spec** is a documented negative result; the working path is decrypt-to-clear.
+- [x] Repo setup (source-only, GPG-signed commits)
+- [x] VM state model + handler enumeration
+- [x] DSE harness for handlers
+- [x] SLEIGH code generation (deterministic skeleton + P-Code semantics)
+- [x] Ghidra disassembly (decrypt-to-clear, phase 6 — both segments, 148 instructions)
+- [ ] Ghidra decompilation (p-code → C) — known limitation (`Bad decompile address`)
 
 ## License
 
