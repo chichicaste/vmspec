@@ -57,14 +57,6 @@ public class DumpDecomp extends GhidraScript {
                 func = fm.getFunctionAt(addr);
             }
 
-            // pin the VPC (program counter) register to the entry address so
-            // the decompiler knows where it starts
-            var ctx = program.getProgramContext();
-            var vpc = program.getLanguage().getRegister("VPC");
-            if (vpc != null) {
-                ctx.setValue(vpc, addr, addr, java.math.BigInteger.valueOf(entry));
-            }
-
             println("=== " + name + " @ 0x" + Long.toHexString(entry)
                     + " (body " + set.getNumAddresses() + " bytes) ===");
             DecompileResults res = ifc.decompileFunction(func, 60, monitor);

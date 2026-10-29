@@ -309,3 +309,38 @@ a VM exit whose target is native code outside the bytecode image (in the
 runtime trace it is `0x01AF5FC7`, inside the engine blob but well past the
 bytecode region). `goto [retpc]` would instead try to decode native x86 as
 VM bytecode.
+
+## 14. The .cspec MUST declare `<global>` (or the decompiler fails)
+
+`DecompInterface.decompileFunction` fails with
+
+```
+Low-level Error: Bad decompile address: r0x00006575
+ram may not be a global space in the spec file.
+```
+
+when the `.cspec` has no `<global>` element. Cause: the native decompiler
+builds its global symbol scope from the cspec's `<global>` ranges
+(`Architecture::parseCompilerConfig` → `addToGlobalScope` →
+`ScopeGhidra::addRange`, which sets `spacerange[space] = 1`). With no range,
+`ScopeGhidra::removeQuery()` short-circuits (`spacerange[ram] == 0`) and
+never queries the Java side for the function symbol, so `decompileAt`'s
+`queryFunction(entry)` finds nothing. The `r` prefix in the message is just
+the ram space's shortcut char — the address itself is fine.
+
+Fix (every real Ghidra cspec carries this):
+
+```xml
+<global>
+  <range space="ram"/>
+</global>
+```
+
+Note the `<global>` ranges are applied after `<stackpointer>`/`<spacebase>`
+parsing, so element order within `<compiler_spec>` does not matter.
+
+Debugging tip: `DecompInterface.enableDebug(File)` dumps the full
+program/command exchange (save-file XML), but requires
+`setOptions(new DecompileOptions())` first — without options it throws an
+NPE at `DecompInterface.decompileFunction` (options are only auto-defaulted
+when debug is off).

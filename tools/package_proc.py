@@ -93,6 +93,12 @@ _CSPEC = """<?xml version="1.0" encoding="UTF-8"?>
     </size_alignment_map>
   </data_organization>
   <stackpointer register="VSP" space="ram"/>
+  <!-- The decompiler's global scope: without a <global> range the native
+       decompiler marks no space as global, never queries the symbol table
+       and DecompInterface fails with "Bad decompile address: r0x...". -->
+  <global>
+    <range space="ram"/>
+  </global>
   <default_proto>
     <prototype name="default" extrapop="0" stackshift="0">
       <input/>
