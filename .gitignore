@@ -105,6 +105,4 @@ data/config.json
 data/_vmcheck.py
 
 # Local analysis scripts kept in the private vmspec-tests repository
-/data/external/emu_unicorn.py
-/data/external/decompile.py
 /data/external/vmspec-tests/
