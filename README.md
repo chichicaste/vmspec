@@ -1,15 +1,14 @@
 # VMSpec — VM deobfuscation via automated SLEIGH spec generation
 
-Independent experimental implementation of the VMSpec architecture, currently validated against a Code Virtualizer-derived VM. Core DSE, state-graph and SLEIGH generation are implemented; automatic semantic/operand recovery and full decompilation are under development.
+Independent experimental implementation of the VMSpec architecture, currently validated against a sample VM. Core DSE, state-graph and SLEIGH generation are implemented; automatic semantic/operand recovery and full decompilation are under development.
 
-The DBIN-specific code, private data, and analysis tools are kept in the
-nested private repository `data/external/vmspec-tests`. The public repository
-contains the VM-agnostic analysis core and synthetic regression fixtures.
+The public repository contains the VM-agnostic analysis core and synthetic
+regression fixtures.
 
-The `specific` branch adds segmented memory, incremental event attribution,
+The implementation includes segmented memory, incremental event attribution,
 guard-aware graphs and a [VM ISA IR](docs/isa-ir.md). See the [target
 architecture](docs/architecture.md) for the stage-by-stage status and the
-[next step](docs/specific-progress.md).
+[implementation progress](docs/specific-progress.md).
 
 An external VM challenge for future frontend work is indexed in the
 [benchmark references](docs/benchmark-references.md).
@@ -42,8 +41,8 @@ and a JSON frontend configuration:
 
     uv run python -m vmspec <binary> <frontend-config.json> --out out.slaspec
 
-The DBIN sample workflow, test data, and Ghidra scripts live in the private
-repository at data/external/vmspec-tests in the local checkout.
+VM-specific sample data and frontend tooling are maintained separately from
+this public analysis core.
 
 ## Core files
 
