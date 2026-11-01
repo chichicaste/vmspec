@@ -148,19 +148,27 @@ class ContextAssumption:
 class StateNode:
     """A node in the per-handler DSE state tree.
 
-    ``mem_ops`` is the linear sequence of symbolic memory accesses executed
-    on the way into the successors; ``calls`` are the external calls
-    recorded at this state; ``cond`` is the symbolic guard selecting this
-    node's branch (evaluated when the node is entered); ``successors`` are
-    the DSE states that follow.
+    ``effects`` preserves the event order recorded by angr across memory,
+    register, and call operations. ``cond`` is an incoming branch guard or
+    specialization assumption; ``successors`` are the DSE states that follow.
     """
 
     addr: int
-    mem_ops: list[MemAccess] = field(default_factory=list)
-    calls: list[Call] = field(default_factory=list)
+    effects: list[MemAccess | RegisterAccess | Call] = field(default_factory=list)
     successors: list["StateNode"] = field(default_factory=list)
     cond: object | None = None
-    register_ops: list[RegisterAccess] = field(default_factory=list)
+
+    @property
+    def mem_ops(self) -> list[MemAccess]:
+        return [op for op in self.effects if isinstance(op, MemAccess)]
+
+    @property
+    def calls(self) -> list[Call]:
+        return [op for op in self.effects if isinstance(op, Call)]
+
+    @property
+    def register_ops(self) -> list[RegisterAccess]:
+        return [op for op in self.effects if isinstance(op, RegisterAccess)]
 
 
 @dataclass
@@ -171,8 +179,8 @@ class GraphNode:
         id: Stable integer assigned by
             :func:`vmspec.state_graph.build_state_graph`.
         addr: VM (or host) address this node corresponds to.
-        ops: Simplified operations to translate to P-Code (``MemAccess`` /
-            ``Call`` instances, plus explicit op names for arithmetic).
+        ops: Ordered simplified operations to translate to P-Code
+            (``MemAccess``, ``RegisterAccess``, ``Call``, plus arithmetic).
         successors: ``(edge_condition, target_node_id)`` pairs.  The
             condition is the guard of the target state, or ``None`` for an
             unconditional fall-through.

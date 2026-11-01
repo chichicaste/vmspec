@@ -1,8 +1,8 @@
 """DSE harness for VM handlers (angr).
 
-Symbolically execute all paths of a single VM handler, recording memory
-operations, function calls, and branch conditions, then build a state tree
-(paper §4.2 / §4.3).
+Symbolically execute all paths of a single VM handler, recording ordered
+memory/register effects, function calls, and branch conditions, then build a
+state tree (paper §4.2 / §4.3).
 
 The memory model from :mod:`vmspec.memory` is installed on the initial state;
 angr copies the inspect breakpoints and the recorder plugin to every forked
@@ -18,6 +18,21 @@ from .memory import install
 from .model import Call, ContextAssumption, Handler, RegisterAccess, StateNode, VMState
 
 _CONTEXT_STATE_THRESHOLD = 100
+_CONTEXT_VALUE_LIMIT = 4
+_CONTEXT_VARIANT_LIMIT = 16
+_CALL_TARGET_LIMIT = 8
+
+
+def _internal_call_targets(project, state, target):
+    targets = state.solver.eval_upto(target, _CALL_TARGET_LIMIT + 1)
+    if (
+        not targets
+        or len(targets) > _CALL_TARGET_LIMIT
+        or any(project.loader.find_object_containing(addr) is None for addr in targets)
+    ):
+        raise NotImplementedError("unbounded or external calls require specialized semantics")
+    return targets
+
 
 def analyze_handler(
     project: angr.Project,
@@ -48,20 +63,10 @@ def analyze_handler(
 
     def on_call(state):
         target = state.inspect.function_address
-        if isinstance(target, int):
-            targets = [target]
-        else:
-            targets = state.solver.eval_upto(target, 2)
-        if len(targets) != 1 or project.loader.find_object_containing(targets[0]) is None:
-            raise NotImplementedError("symbolic or external calls require specialized semantics")
+        _internal_call_targets(project, state, target)
         _concretize_unique_context([state], vm_state.context)
-        if any(
-            getattr(state.regs, name).symbolic
-            for name in vm_state.context if name in state.arch.registers
-        ):
-            raise NotImplementedError("native calls require a concrete VM context")
-        # Execute in-binary native code in this concrete context and lower its
-        # observed memory/register effects inline into the VM handler.
+        # Angr resolves finite symbolic targets and executes the in-binary call
+        # in the current symbolic context, preserving its path conditions.
 
     init.inspect.b("call", when=angr.BP_BEFORE, action=on_call)
 
@@ -86,7 +91,7 @@ def analyze_handler(
         if not simgr.active:
             break
         if len(simgr.active) > _CONTEXT_STATE_THRESHOLD:
-            _concretize_unique_context(simgr.active, vm_state.context)
+            simgr.active = _specialize_context(simgr.active, vm_state.context)
         simgr.step(extra_stop_points={handler.end, *(base for base, _ in vm_state.dispatcher_ranges)})
         simgr.move("active", "found", reached_end)
         if not simgr.active:
@@ -119,16 +124,51 @@ def _concretize_unique_context(states, names) -> int:
             solutions = state.solver.eval_upto(value, 2)
             if len(solutions) != 1:
                 continue
-            concrete = claripy.BVV(solutions[0], value.size())
-            state.add_constraints(value == concrete)
-            state.history.add_event(
-                "vmspec", operation=ContextAssumption(value == concrete)
-            )
-            offset, size = state.arch.registers[name]
-            state.registers.store(
-                offset, concrete, size=size, endness=state.arch.register_endness, inspect=False
-            )
+            _bind_context(state, name, value, solutions[0])
             specialized += 1
+    return specialized
+
+
+def _bind_context(state, name, value, solution) -> None:
+    concrete = claripy.BVV(solution, value.size())
+    assumption = value == concrete
+    state.add_constraints(assumption)
+    state.history.add_event("vmspec", operation=ContextAssumption(assumption))
+    offset, size = state.arch.registers[name]
+    state.registers.store(offset, concrete, size=size,
+                          endness=state.arch.register_endness, inspect=False)
+
+
+def _specialize_context(states, names):
+    """Split only small finite VM-context domains, preserving each guard."""
+    specialized = []
+    for state in states:
+        variants = [state]
+        for name in names:
+            if name not in state.arch.registers:
+                continue
+            expanded = []
+            for variant in variants:
+                value = getattr(variant.regs, name)
+                if not value.symbolic:
+                    expanded.append(variant)
+                    continue
+                solutions = variant.solver.eval_upto(value, _CONTEXT_VALUE_LIMIT + 1)
+                if len(solutions) == 1:
+                    _bind_context(variant, name, value, solutions[0])
+                    expanded.append(variant)
+                elif (
+                    1 < len(solutions) <= _CONTEXT_VALUE_LIMIT
+                    and len(variants) * len(solutions) <= _CONTEXT_VARIANT_LIMIT
+                ):
+                    for solution in solutions:
+                        branch = variant.copy()
+                        _bind_context(branch, name, value, solution)
+                        expanded.append(branch)
+                else:
+                    expanded.append(variant)
+            variants = expanded
+        specialized.extend(variants)
     return specialized
 
 
@@ -159,14 +199,10 @@ def _build_tree(leaves: list[angr.SimState], *, entry: int) -> StateNode | None:
                 if node is None:
                     op = event.objects["operation"]
                     node = StateNode(addr=event.ins_addr or h.addr or entry)
-                    if isinstance(op, Call):
-                        node.calls.append(op)
-                    elif isinstance(op, RegisterAccess):
-                        node.register_ops.append(op)
-                    elif isinstance(op, ContextAssumption):
+                    if isinstance(op, ContextAssumption):
                         node.cond = op.condition
                     else:
-                        node.mem_ops.append(op)
+                        node.effects.append(op)
                     prev.successors.append(node)
                     nodes[key] = node
                 prev = node

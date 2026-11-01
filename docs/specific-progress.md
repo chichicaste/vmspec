@@ -20,7 +20,8 @@ See [architecture.md](architecture.md) for the target pipeline, current implemen
 - Symbolic reads and writes do not choose pointer values. Mutable image
   memory is symbolic unless a prior write supplies its value. A readonly
   region may supply an image value only at a uniquely determined address.
-- Ordered memory/call events live in angr histories. The tree shares event
+- Ordered memory, register, and call effects live in angr histories and remain
+  in one sequence through the state tree and state graph. The tree shares event
   prefixes across forks and places outgoing guards after their defining loads.
 - Read liveness traverses symbolic ASTs. Forwarded reads do not redefine
   previous values. Node merging includes edge guards and operation order.
@@ -39,30 +40,28 @@ See [architecture.md](architecture.md) for the target pipeline, current implemen
 
 Run from the repository root:
 
-    .venv\Scripts\python.exe -m unittest discover -s tests -v
+    .venv\Scripts\python.exe data/external/vmspec-tests/tools/run_core_tests.py
 
-The tests use synthetic states and a small native x86 handler. No private
-blob is required. Ghidra integration tests compile the emitted specifications;
-they skip explicitly if the compiler is unavailable. A pypcode-based test
-executes the compiled branch fixture for four inputs and compares its memory
-result with native x86 execution in angr. Its deliberately small test
-interpreter rejects any operation outside that fixture.
+The synthetic regression suite is stored in the private companion test repo.
+It includes small native x86 handlers, Ghidra compilation, and a pypcode check
+that compares compiled branch behavior with native execution in angr.
 
 This is a narrow semantic regression check, not a general equivalence
 validator or the paper's benchmark.
 
 ## Remaining work
 
-1. Recover native-to-VM register bindings and model native transitions.
-   Tracked 32-bit register writes are now lowered; direct in-binary calls are
-   inlined only when their target and configured context are concrete. External
-   or symbolic calls still fail explicitly.
+1. Recover native-to-VM register bindings and model external/native transitions.
+   Tracked 32-bit register writes are lowered; finite in-binary call targets
+   are analyzed inline with symbolic context. Unbounded or external calls still
+   fail explicitly.
 2. Extend operand inference beyond contiguous VPC-relative reads of 1, 2, or 4
    bytes. Gaps, overlapping reads, and full multi-source taint recovery remain
    unsupported.
-3. Extend context specialization beyond solver-unique values. When active
-   states exceed 100, unique configured context values are concretized with an
-   explicit path guard; ambiguous values remain symbolic.
+3. Extend context specialization beyond small finite context domains. When
+   active states exceed 100, configured domains of up to four values are split
+   with explicit path guards (at most 16 variants per path); larger domains
+   remain symbolic.
 4. Keep DBIN-specific handlers, operand formulas, the reference VM, and the
    clear-image workflow in private vmspec-tests; replace their manual
    knowledge with inferred semantics in the generic pipeline.
@@ -82,3 +81,7 @@ Regions without concrete bounds cannot establish disjointness.
 The legacy decrypt-to-clear workflow and rolling-context investigation remain
 in the private test repository. Neither is evidence that the missing
 automated inference or full decompilation has been completed.
+
+Anti-Slop's Parallax VM is an x86-64 Go service with a QAR cartridge. It needs
+a dedicated frontend and wider target support before the current 32-bit
+pipeline can analyze it.

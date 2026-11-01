@@ -60,26 +60,27 @@ def build_state_graph(root: StateNode) -> GraphNode:
         live = set()
         for child in node.successors:
             live.update(uses[id(child)])
-        for call in node.calls:
-            live.update(_references(call.target))
         kept = []
-        kept_registers = []
-        for op in reversed(node.register_ops):
-            live.update(_references(op.value))
-            kept_registers.append(op)
-        for op in reversed(node.mem_ops):
-            if op.kind == "read":
-                if op.forwarded or _key(op.value) not in live:
-                    continue
-                live.discard(_key(op.value))
-            else:
+        for op in reversed(node.effects):
+            if isinstance(op, MemAccess):
+                if op.kind == "read":
+                    if op.forwarded or _key(op.value) not in live:
+                        continue
+                    live.discard(_key(op.value))
+                else:
+                    live.update(_references(op.value))
+                live.update(_references(op.addr))
+            elif isinstance(op, RegisterAccess):
                 live.update(_references(op.value))
-            live.update(_references(op.addr))
+            elif isinstance(op, Call):
+                live.update(_references(op.target))
+            else:
+                raise TypeError(f"unsupported state effect: {op!r}")
             kept.append(op)
         # Incoming conditions execute before this node's effects.
         live.update(_references(node.cond))
         uses[id(node)] = live
-        ops = list(reversed(kept)) + list(reversed(kept_registers)) + list(node.calls)
+        ops = list(reversed(kept))
         edges = [(child.cond, graphs[id(child)].id) for child in node.successors]
         signatures = tuple(
             ("mem", op.kind, op.size, op.endness, _key(op.addr), _key(op.value))
