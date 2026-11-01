@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 1-2 automation: extract VM state + handler enumeration from vm_dbin.bin.
+"""Phase 1-2 automation: extract VM state + handler enumeration from the engine blob.
 
 Reads the VM bytecode blob (a self-contained image: native handlers + dispatch
 table + bytecode program) and emits a ``config.json`` describing the VM state
@@ -158,7 +158,7 @@ def gen_config(blob_path: str | Path, out_path: str | Path) -> dict:
 if __name__ == "__main__":
     import sys
 
-    blob = sys.argv[1] if len(sys.argv) > 1 else "data/vm_dbin.bin"
+    blob = sys.argv[1]
     out = sys.argv[2] if len(sys.argv) > 2 else "data/config.json"
     cfg = gen_config(blob, out)
     print(f"wrote {out}: {len(cfg['handlers'])} handlers, vpc={cfg['vpc']}, "

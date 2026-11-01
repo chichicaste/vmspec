@@ -17,7 +17,7 @@ TAB_OFF = 0x5000  # dispatch table offset in the blob
 
 
 def main(argv: list[str]) -> int:
-    blob_path = argv[0] if len(argv) > 0 else "data/vm_dbin.bin"
+    blob_path = argv[0]
     config_path = argv[1] if len(argv) > 1 else "data/config.json"
 
     dbin = open(blob_path, "rb").read()

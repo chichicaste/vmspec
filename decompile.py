@@ -551,7 +551,8 @@ def replay(trace_ops, dbin, jt, start=0, limit=None, log_out=None, flags=None, s
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trace", default=os.path.join(os.environ.get("TEMP", "."), "emu_trace.json"))
-    ap.add_argument("--dbin", default="data/vm_dbin.bin")
+    ap.add_argument("--dbin", required=True,
+                    help="path to the VM engine blob (see the private vmspec-tests repo)")
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--data-only", action="store_true",

@@ -52,7 +52,7 @@ def decrypt(byte: int, key: int) -> int:
 
 
 def main(argv: list[str]) -> int:
-    blob_path = argv[0] if len(argv) > 0 else "data/vm_dbin.bin"
+    blob_path = argv[0]
     out_path = argv[1] if len(argv) > 1 else "data/context.txt"
 
     dbin = open(blob_path, "rb").read()

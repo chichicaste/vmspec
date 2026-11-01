@@ -28,7 +28,7 @@ def _cond_desc(cond) -> str:
 
 def main(argv: list[str]) -> int:
     config_path = argv[0] if len(argv) > 0 else "data/config.json"
-    blob_path = argv[1] if len(argv) > 1 else "data/vm_dbin.bin"
+    blob_path = argv[1]
     target = argv[2] if len(argv) > 2 else "pop"
 
     cfg = load_config(config_path)

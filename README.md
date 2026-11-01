@@ -34,16 +34,20 @@ The working path is **decrypt-to-clear**: decrypt the opcode and operand bytes u
 
 ## Usage
 
+The raw VM blob is **not** in this repo (it is the analysis input). Fetch it
+from the private `vmspec-tests` repo (`data/vm_dbin.bin`). Pass its path as the
+first argument to every tool below (shown here as `<blob>`).
+
 ```console
 # 1. enumerate handlers + build the config
-uv run python tools/gen_config.py data/vm_dbin.bin data/config.json
+uv run python tools/gen_config.py <blob> data/config.json
 
 # 2. (optional) run the full DSE pipeline -> rolling-key .slaspec
-uv run python -m vmspec data/vm_dbin.bin data/config.json \
+uv run python -m vmspec <blob> data/config.json \
     --base-addr 0x1AE1000 --max-steps 100 --out out.slaspec
 
 # 3. decrypt the bytecode to a clear image + clear spec
-uv run python tools/decrypt_bytecode.py data/vm_dbin.bin data/config.json \
+uv run python tools/decrypt_bytecode.py <blob> data/config.json \
     data/_clear.bin data/_clear.slaspec
 
 # 4. package the clear processor module + install into Ghidra
@@ -88,9 +92,11 @@ vmspec/
 ├── docs/
 │   ├── SLEIGH.md              #   Ghidra 12.2 SLEIGH syntax notes
 │   └── fallthrough-critique.md  # the triple-negative result
-├── data/                      # analysis input (config.json) + artifacts
 └── pyproject.toml
 ```
+
+The VM blob (`vm_dbin.bin`) and other test artifacts live in the private
+`vmspec-tests` repo, not here.
 
 ## The bytecode VM
 

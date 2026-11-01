@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Unicorn full-trace emulator for the etvm dbin VM.
+"""Unicorn full-trace emulator for the recovered VM engine.
 
-Loads ``data/vm_dbin.bin`` at its *design* address (0x1AE1000) so all the
+Loads the engine blob at its *design* address (0x1AE1000) so all the
 0x01AE-prefixed raw pointers resolve with zero relocation, stubs the 4 Win32
 imports (WideCharToMultiByte / lstrcpyA / lstrlenA / GetSystemTime), and runs
 the real interpreter.  We never reimplement a handler by hand -- Unicorn runs
@@ -10,7 +10,7 @@ are all observed, not simulated.
 
 Outputs:
   * opcode trace (JSON)  -- one entry per decoded VM opcode
-  * F1/F2 captured from the out-param pointers *and* the dbin slots
+  * F1/F2 captured from the out-param pointers *and* the blob slots
 """
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ class VMEmulator:
         self.ecm_bytes = ecm.encode("utf-16-le") + b"\x00\x00"
         self.uc.mem_write(ECM_ADDR, self.ecm_bytes)
 
-        # --- stack: push f2, f1, ecm, vm_ret (mirrors etvm.c trampoline) --
+        # --- stack: push f2, f1, ecm, vm_ret (mirrors the native trampoline) --
         esp = STACK_TOP
         def push(v: int) -> None:
             nonlocal esp
@@ -349,7 +349,8 @@ class VMEmulator:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dbin", default="data/vm_dbin.bin")
+    ap.add_argument("--dbin", required=True,
+                    help="path to the VM engine blob (see the private vmspec-tests repo)")
     ap.add_argument("--ecm", default=";0;0;0;0;0;0;0")
     ap.add_argument("--year", type=int, default=2017)
     ap.add_argument("--month", type=int, default=1)

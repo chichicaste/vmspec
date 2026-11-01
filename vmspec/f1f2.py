@@ -10,7 +10,7 @@ as a three-stage pipeline:
 
 This module implements stage 2, ported from the decompiled ``sub_A9A279``.  The
 primitives (the substitution table and the alphabets) are embedded in the engine
-image (``vm_dbin.bin`` / ``ettool_dbin.bin``) at fixed offsets:
+image at fixed offsets:
 
     =======  ======  =====================================================
     offset   size    content
@@ -32,7 +32,7 @@ recovered here (``ROT`` belongs to the not-yet-ported rotation step of stage 1).
 
 from __future__ import annotations
 
-# Offsets of the primitives inside the engine image (vm_dbin.bin).
+# Offsets of the primitives inside the engine image.
 ROT_OFF = 0x149B
 KEY_OFF = 0x14B7
 TBL_OFF = 0x14D7

@@ -42,7 +42,7 @@ INITIAL_KEY = 0x407575   # dispatcher's initial 32-bit rolling key
 
 
 def main(argv: list[str]) -> int:
-    blob_path = argv[0] if len(argv) > 0 else "data/vm_dbin.bin"
+    blob_path = argv[0]
     config_path = argv[1] if len(argv) > 1 else "data/config.json"
     out_clear = argv[2] if len(argv) > 2 else "data/_clear.bin"
     out_spec = argv[3] if len(argv) > 3 else "data/_clear.slaspec"

@@ -62,7 +62,8 @@ The interpreter loop: fetch → decode → dispatch → execute → terminator.
 
 ## Mapping to the target VM
 
-- Bytecode: `vm_dbin.bin` (extracted). Handler table: rolling-key dispatch.
+- Bytecode: `vm_dbin.bin` (extracted, kept in the private `vmspec-tests` repo).
+  Handler table: rolling-key dispatch.
 - A partial reference interpreter diverges at an input-dependent step — exactly where
   the VMSpec DSE approach should recover the complete semantics.
 - DSE engine: **angr** (chosen). Rationale: VMSpec's core requirement is a memory model
