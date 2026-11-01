@@ -79,8 +79,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "falls back to the 'arch' field of the config file when omitted)"
         ),
     )
-    parser.add_argument("--mode", choices=("rolling", "clear"), default="rolling",
-                        help="opcode encoding for the generated spec")
     return parser
 
 
@@ -113,7 +111,6 @@ def main(argv: list[str] | None = None) -> int:
         base_addr=base_addr,
         arch=arch,
         dispatch_table=config.dispatch_table,
-        mode=args.mode,
     )
     handlers = config.handlers
 

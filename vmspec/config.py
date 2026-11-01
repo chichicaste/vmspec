@@ -11,7 +11,7 @@ with the list of opcode handlers the pipeline should analyse.  Example::
       "regions": [{"name": "ram", "kind": "state", "base": null, "size": null}],
       "context": [],
       "entry": 4198400,
-      "base_addr": "0x1AE1000",
+      "base_addr": "0x400000",
       "arch": "x86",
       "handlers": [
         {"opcode": 16, "entry": 4198416, "end": 4198496, "mnemonic": "add"}
@@ -25,7 +25,7 @@ Region ``kind`` must be one of the :class:`vmspec.model.RegionKind` values
 ``bytecode``, when present, is a hex-encoded string.
 
 The optional ``base_addr`` field (an integer in decimal form or a hex string
-like ``"0x1AE1000"``) requests raw-blob loading: the pipeline maps the binary
+like ``"0x400000"``) requests raw-blob loading: the pipeline maps the binary
 file as a byte blob at that address instead of letting angr detect the file
 format.  ``arch`` (string, default ``"x86"``) names the angr architecture to
 use in that mode.  Only the standard library is used.
@@ -200,7 +200,7 @@ def _parse_base_addr(value: Any) -> int | None:
     """Parse the optional raw-blob mapping address ``base_addr``.
 
     Accepted forms: ``null``, a positive decimal integer (e.g. ``28185088``)
-    or a string parsable with ``int(x, 0)`` so both ``"0x1AE1000"`` and
+    or a string parsable with ``int(x, 0)`` so both ``"0x400000"`` and
     ``"28185088"`` are valid.
     """
     if value is None:

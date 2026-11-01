@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 
 import angr
 
@@ -25,7 +26,7 @@ def recover_isa(
     base_addr: int | None = None,
     arch: str = "x86",
     dispatch_table: list[int] | None = None,
-    mode: str = "rolling",
+    opcode_encoder: Callable | None = None,
 ) -> ISA:
     """Analyze handlers and return independent IR for any consumer."""
     if base_addr is not None:
@@ -49,7 +50,7 @@ def recover_isa(
             continue
         built.append((handler, build_state_graph(state_root)))
 
-    return lower_isa(built, vm_state, dispatch_table, mode=mode)
+    return lower_isa(built, vm_state, dispatch_table, opcode_encoder=opcode_encoder)
 
 
 def run_pipeline(
@@ -61,11 +62,11 @@ def run_pipeline(
     base_addr: int | None = None,
     arch: str = "x86",
     dispatch_table: list[int] | None = None,
-    mode: str = "rolling",
+    opcode_encoder: Callable | None = None,
 ) -> str:
     """Recover the VM ISA IR, then pass it to the SLEIGH backend."""
     isa = recover_isa(
         binary_path, vm_state, handlers, max_steps=max_steps, base_addr=base_addr,
-        arch=arch, dispatch_table=dispatch_table, mode=mode,
+        arch=arch, dispatch_table=dispatch_table, opcode_encoder=opcode_encoder,
     )
     return generate_sleigh(isa)

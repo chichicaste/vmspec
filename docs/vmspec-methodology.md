@@ -60,15 +60,8 @@ The interpreter loop: fetch → decode → dispatch → execute → terminator.
 - Obfuscator-specific handler detection for Tigress (`ifnest` dispatch) and
   Code Virtualizer (table dispatch). VMProtect left out (state identification limits).
 
-## Mapping to the target VM
+The DBIN-specific target mapping, reference interpreter, and recovered handler
+semantics are kept in the private `vmspec-tests` repository.
 
-- Bytecode: `vm_dbin.bin` (extracted, kept in the private `vmspec-tests` repo).
-  Handler table: rolling-key dispatch.
-- A partial reference interpreter diverges at an input-dependent step — exactly where
-  the VMSpec DSE approach should recover the complete semantics.
-- DSE engine: **angr** (chosen). Rationale: VMSpec's core requirement is a memory model
-  that does *not* concretize symbolic pointers (the MEMSIGHT-style model); angr supports
-  this directly (SimMemory hooks + concretization strategies), has built-in path
-  exploration, and is the paper's own engine. Triton's memory model concretizes pointers
-  by design and its focus is taint-based concolic analysis, so it would need the custom
-  model reimplemented on top of callbacks.
+The core uses **angr** because its custom memory model can avoid concretizing
+symbolic pointers while reusing angr's path exploration and inspection hooks.

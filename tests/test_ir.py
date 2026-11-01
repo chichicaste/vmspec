@@ -15,6 +15,13 @@ from vmspec.model import Call, GraphNode, Handler, MemAccess, VMState
 from vmspec.sleigh_gen import generate_sleigh
 
 
+def test_opcode_encoder(opcode):
+    key = ir.Expr("context", 8, value="key")
+    pattern = ir.Expr("add", 8, (ir.Expr("const", 8, value=opcode), key))
+    update = ir.ContextUpdate("key", ir.Expr("sub", 8, (key, ir.Expr("const", 8, value=opcode))))
+    return pattern, (update,)
+
+
 class IRTests(unittest.TestCase):
     def graph(self):
         value = claripy.BVS("input", 32)
@@ -76,7 +83,7 @@ class IRTests(unittest.TestCase):
     def test_dispatch_aliases_keep_per_opcode_context_updates(self):
         graph = self.graph()
         isa = lower_isa([(Handler(0, 0x4000, 0x4010), graph)],
-                        VMState("VPC"), [0x4000] * 256, mode="rolling")
+                        VMState("VPC"), [0x4000] * 256, opcode_encoder=test_opcode_encoder)
         a, b = isa.instructions[1:3]
         self.assertEqual(a.blocks, b.blocks)
         self.assertEqual(a.context_updates[0].value.args[1].value, 1)
@@ -164,13 +171,14 @@ assert "angr" not in sys.modules and "claripy" not in sys.modules
         self.assertIn("local tmp1:4 = *:4 VPC;", spec)
         self.assertIn("*:4 VPC = tmp1;", spec)
 
-    def test_rolling_ir_compiles_with_ghidra(self):
+    def test_frontend_encoded_ir_compiles_with_ghidra(self):
         try:
             compiler = find_sleigh()
         except FileNotFoundError as exc:
             self.skipTest(str(exc))
         graph = GraphNode(0, 0x4000, [MemAccess("write", 0x1000, 42, 4)])
-        isa = lower_isa([(Handler(1, 0x4000, 0x4010), graph)], VMState("VPC"), mode="rolling")
+        isa = lower_isa([(Handler(1, 0x4000, 0x4010), graph)], VMState("VPC"),
+                        opcode_encoder=test_opcode_encoder)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rolling.slaspec"
             path.write_text(generate_sleigh(isa), encoding="utf-8")

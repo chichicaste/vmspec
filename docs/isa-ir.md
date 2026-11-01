@@ -74,14 +74,15 @@ config = load_config("config.json")
 isa = recover_isa(
     "handler.bin", config.vm_state, config.handlers,
     base_addr=config.base_addr, arch=config.arch,
-    dispatch_table=config.dispatch_table, mode="clear",
+    dispatch_table=config.dispatch_table,
 )
 spec = generate_sleigh(isa)
 snapshot = json.dumps(asdict(isa), indent=2)
 ```
 
-`run_pipeline(...)` keeps its existing signature and returns SLEIGH, but now
-calls `recover_isa(...)` first. Direct callers of the former
+`run_pipeline(...)` returns SLEIGH and calls `recover_isa(...)` first. A
+frontend can pass `opcode_encoder` to supply an encoded opcode pattern and
+decode-context updates. Direct callers of the former
 `generate_sleigh(graph, vm_state, handlers, ...)` API must migrate to
 `generate_sleigh(isa)`. Existing analyzed handler graphs can be converted
 with `lower_isa([(handler, graph), ...], vm_state, ...)`; node ids are not
@@ -98,12 +99,12 @@ backend and general equivalence validator are not implemented by this change.
 The existing compiled-P-Code branch comparison remains a regression test.
 
 The current encoding model represents an eight-bit opcode, and SLEIGH still
-targets 32-bit little-endian memory, the existing register layout and the
-sample's eight-bit `key` context field. Native register effects, operand
-inference and specialization remain separate work.
+targets 32-bit little-endian memory and the existing register layout. Operand
+recovery covers one contiguous VPC-relative read; native register effects and
+specialization remain separate work.
 
 Tests verify JSON-compatible IR without analysis objects, deterministic
-temporary names, effect order, dispatch aliases, typing and dominance.
+temporary names, effect order, frontend encoding callbacks, typing and dominance.
 A subprocess without site-packages builds an ISA and emits SLEIGH. Ghidra
-tests compile both clear and rolling encodings, and the native/P-Code branch
+tests compile clear and frontend-encoded patterns, and the native/P-Code branch
 comparison passes through the new IR boundary.

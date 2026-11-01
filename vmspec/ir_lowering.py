@@ -1,10 +1,11 @@
 """Translate analysis objects into VM ISA IR; this is the claripy boundary."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import claripy
 
 from . import ir
-from .operand import encrypt_const
 from .model import Call, GraphNode, Handler, MemAccess, VMState
 
 
@@ -109,10 +110,9 @@ def _operand_reads(nodes, vpc_name):
     return None if decoded is None else (read, relative + 1, decoded)
 
 
-def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode="clear", opcode=None):
+def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opcode=None,
+                  opcode_encoder: Callable[[int], tuple[ir.Expr, tuple[ir.ContextUpdate, ...]]] | None = None):
     """Lower one graph without retaining ASTs or mutating its node ids."""
-    if mode not in {"clear", "rolling"}:
-        raise ValueError("mode must be rolling or clear")
     opcode = handler.opcode if opcode is None else opcode
     nodes = _nodes(graph)
     ids = {node.id: i for i, node in enumerate(nodes)}
@@ -164,15 +164,10 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode
 
     raw_opcode = ir.Expr("const", 8, value=opcode)
     updates = ()
-    if mode == "rolling":
-        # This frontend retains the sample's encoding; the IR stores its formula.
-        constant = encrypt_const(opcode)
-        key = ir.Expr("context", 8, value="key")
-        raw_opcode = ir.Expr("sub", 8, (
-            ir.Expr("add", 8, (ir.Expr("const", 8, value=constant), key)),
-            ir.Expr("const", 8, value=1),
-        ))
-        updates = (ir.ContextUpdate("key", ir.Expr("sub", 8, (key, ir.Expr("const", 8, value=opcode)))),)
+    if opcode_encoder is not None:
+        raw_opcode, updates = opcode_encoder(opcode)
+        if not isinstance(raw_opcode, ir.Expr) or any(not isinstance(u, ir.ContextUpdate) for u in updates):
+            raise TypeError("opcode_encoder must return an IR expression and context-update tuple")
     if inferred is not None:
         read, offset, decoded = inferred
         name = operands[0].name
@@ -185,11 +180,12 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode
                           handler.mnemonic, operands=operands, context_updates=updates)
 
 
-def lower_isa(built: list[tuple[Handler, GraphNode]], vm_state: VMState, dispatch_table=None, *, mode="clear"):
-    if mode not in {"clear", "rolling"}:
-        raise ValueError("mode must be rolling or clear")
+def lower_isa(
+    built: list[tuple[Handler, GraphNode]], vm_state: VMState, dispatch_table=None, *,
+    opcode_encoder: Callable[[int], tuple[ir.Expr, tuple[ir.ContextUpdate, ...]]] | None = None,
+):
     if dispatch_table is None:
-        instructions = tuple(lower_handler(h, g, vm_state, mode=mode) for h, g in built)
+        instructions = tuple(lower_handler(h, g, vm_state, opcode_encoder=opcode_encoder) for h, g in built)
     else:
         if len(dispatch_table) != 256:
             raise ValueError("dispatch_table must have 256 entries")
@@ -199,6 +195,6 @@ def lower_isa(built: list[tuple[Handler, GraphNode]], vm_state: VMState, dispatc
             if entry not in by_entry:
                 raise ValueError(f"opcode 0x{opcode:02X} has no analyzed handler")
             h, g = by_entry[entry]
-            instructions.append(lower_handler(h, g, vm_state, mode=mode, opcode=opcode))
+            instructions.append(lower_handler(h, g, vm_state, opcode=opcode, opcode_encoder=opcode_encoder))
         instructions = tuple(instructions)
     return ir.ISA(vm_state.vpc, vm_state.vsp, instructions)

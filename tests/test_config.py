@@ -38,8 +38,8 @@ class ConfigTests(unittest.TestCase):
             config_path.write_text(json.dumps(self.config()))
             binary.write_bytes(bytes.fromhex("8b0685c07408c70701000000eb06c7070200000090"))
             with contextlib.redirect_stderr(io.StringIO()):
-                result = main([str(binary), str(config_path), "--mode", "clear",
-                               "--max-steps", "8", "--out", str(spec)])
+                result = main([str(binary), str(config_path), "--max-steps", "8",
+                               "--out", str(spec)])
             self.assertEqual(result, 0)
             self.assertIn("is byte = 0x01", spec.read_text())
             self.assertIn("goto <node_", spec.read_text())

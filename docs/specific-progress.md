@@ -31,9 +31,9 @@ See [architecture.md](architecture.md) for the target pipeline, current implemen
   concatenation, reversal and conditional expressions have explicit lowering.
   Unknown inputs and unsupported operators raise instead of becoming zero.
 - Dispatcher ranges belong to configuration, not to a constant in core DSE.
-  The sample-specific config generator supplies its known range.
-- The CLI accepts --mode clear or --mode rolling. The clear mode in the core
-  matches opcode bytes; it does not normalize encrypted operands.
+  DBIN-specific frontend metadata is held in the private test repository.
+- The core assumes clear opcode bytes by default. A frontend can provide its
+  opcode-encoding callback through the Python API.
 
 ## Validation
 
@@ -61,8 +61,9 @@ validator or the paper's benchmark.
    operand of 1, 2, or 4 bytes.
 3. Implement context concretization/specialization with explicit permitted
    context, rather than arbitrary state concretization.
-4. Replace the sample-specific reference path: semantics.py, operand.py,
-   vm.py and the clear-image utility still contain manual knowledge.
+4. Keep DBIN-specific handlers, operand formulas, the reference VM, and the
+   clear-image workflow in private vmspec-tests; replace their manual
+   knowledge with inferred semantics in the generic pipeline.
 5. Demonstrate complete CFG and C decompilation, then generalize family
    frontends/state detection and expand equivalence tests and benchmarks.
 
@@ -70,12 +71,12 @@ The core backend currently requires 32-bit little-endian targets. Unsupported
 ASTs, symbolic access sizes/conditions, missing handler graphs and unresolved
 inputs fail explicitly. This intentionally makes the experimental DSE path
 stricter than main. Existing sample configurations should be regenerated with
-tools/gen_config.py to include dispatcher_ranges.
+the sample frontend config to include dispatcher_ranges.
 
 Partial-overlap writes invalidate a whole older cache entry; adjacent writes
 are not reconstructed into a larger cached read. Such reads remain symbolic.
 Regions without concrete bounds cannot establish disjointness.
 
 The legacy decrypt-to-clear workflow and rolling-context investigation remain
-available. Neither is evidence that the missing automated inference or full
-decompilation has been completed.
+in the private test repository. Neither is evidence that the missing
+automated inference or full decompilation has been completed.
