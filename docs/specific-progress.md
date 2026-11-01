@@ -1,7 +1,7 @@
-# Work on the specific branch
+# Implementation progress
 
-This branch is an incremental implementation of the audit, not a complete
-reproduction of the VMSpec paper.
+The current implementation is an incremental realization of the audit, not a
+complete reproduction of the VMSpec paper.
 
 ## Architecture
 
@@ -69,8 +69,8 @@ validator or the paper's benchmark.
 
 The core backend currently requires 32-bit little-endian targets. Unsupported
 ASTs, symbolic access sizes/conditions, missing handler graphs and unresolved
-inputs fail explicitly. This intentionally makes the experimental DSE path
-stricter than main. Existing sample configurations should be regenerated with
+inputs fail explicitly. The experimental DSE path keeps these unsupported
+cases explicit. Existing sample configurations should be regenerated with
 the sample frontend config to include dispatcher_ranges.
 
 Partial-overlap writes invalidate a whole older cache entry; adjacent writes
