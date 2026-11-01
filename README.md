@@ -1,30 +1,41 @@
 # VMSpec — VM deobfuscation via automated SLEIGH spec generation
 
-An implementation of the **VMSpec** approach
-([arXiv:2610.29566](https://arxiv.org/abs/2610.29566), "A Decompiler-based
-Approach against Virtual Machine Obfuscation", TU Munich — Kilger, Auer,
-Andreas): automatically generate a Ghidra SLEIGH processor specification for an
-obfuscated virtual machine, then use Ghidra to disassemble and lift the VM
-bytecode.
+An independent experimental implementation of the **VMSpec** architecture
+([arXiv:2610.29566](https://arxiv.org/abs/2610.29566), Fabian Kilger,
+Leonard Auer and Manuel Andreas). The sample workflow targets a
+Code Virtualizer-derived VM. Core DSE, state-graph and SLEIGH generation are
+implemented; automatic semantic/operand recovery and full C decompilation
+remain under development.
 
-The input is a raw VM blob (native handlers + a 256-entry dispatch table + the
-encrypted bytecode program). The output is a Ghidra processor module that
-disassembles the decrypted bytecode. The tooling is VM-agnostic.
+The sample input is a raw VM blob containing native handlers, a dispatch
+table and encrypted bytecode. Its existing clear-image workflow still uses
+sample-specific decoding, manual semantics and a reference interpreter.
+
+The `specific` branch adds segmented memory, incremental event attribution,
+guard-aware graphs, a [VM ISA IR](docs/isa-ir.md) and SLEIGH local branches. See
+[implementation progress and limits](docs/specific-progress.md) for completed
+checks and the remaining audit items.
 
 ## Pipeline
 
 1. **Config + handler enumeration** — `tools/gen_config.py` extracts the VM state (VPC/VSP, regions, context) and the 256-entry dispatch table from the blob.
 2. **DSE** — `vmspec/dse.py` symbolically executes each handler with angr, recording memory accesses and calls.
 3. **State graph** — `vmspec/state_graph.py` merges each handler's DSE state tree into a simplified graph.
-4. **SLEIGH generation** — a deterministic skeleton (`vmspec/skeleton.py`) + per-handler P-Code semantics (`vmspec/semantics.py`), compiled with Ghidra's `sleigh` (the isa_recovery two-phase pattern).
-5. **Disassembly** — decrypt the bytecode to a clear image (`tools/decrypt_bytecode.py`), package the processor (`tools/package_proc.py`) and disassemble in Ghidra (`analyzeHeadless`).
+4. **VM ISA IR** - `vmspec/ir_lowering.py` converts analysis ASTs into typed expressions and ordered instruction blocks in `vmspec/ir.py`.
+5. **SLEIGH generation** - `vmspec/sleigh_gen.py` consumes only the IR. The legacy sample workflow still uses `skeleton.py` and manual `semantics.py`.
+6. **Disassembly** — decrypt the bytecode to a clear image (`tools/decrypt_bytecode.py`), package the processor (`tools/package_proc.py`) and disassemble in Ghidra (`analyzeHeadless`).
 
-## Key techniques (from the paper)
+## Core analysis status
 
-- **Custom memory model** — never concretize symbolic pointers; emit a fresh symbolic variable per read (except read-only memory), so handler semantics stay complete.
-- **Context concretization** — concretize encrypted operands / context to tame path explosion (when active states exceed a threshold).
-- **State-graph simplification** — def-use analysis to drop dead memory ops, then merge equivalent nodes.
-- **Operand identification** — Sharif et al. heuristic: operands sit at small constant offsets from the opcode (reads near the VPC).
+- **Memory model**: path-local recent writes, conservative alias invalidation,
+  VMState region classification and explicit readonly ranges.
+- **State graph**: ordered events, AST-based read liveness and guarded node
+  merging; stores are retained conservatively.
+- **SLEIGH**: supported ASTs and internal branches are emitted; unsupported
+  semantics fail explicitly instead of becoming zero.
+- **Context specialization and operand inference**: still pending.
+- **Tests**: `python -m unittest discover -s tests -v`, including optional
+  Ghidra compilation and a native-vs-P-Code branch regression.
 
 ## Key finding: rolling-key vs decrypt-to-clear
 
@@ -42,7 +53,7 @@ first argument to every tool below (shown here as `<blob>`).
 # 1. enumerate handlers + build the config
 uv run python tools/gen_config.py <blob> data/config.json
 
-# 2. (optional) run the full DSE pipeline -> rolling-key .slaspec
+# 2. experimental DSE pipeline (fails on unsupported semantics; see progress doc)
 uv run python -m vmspec <blob> data/config.json \
     --base-addr 0x1AE1000 --max-steps 100 --out out.slaspec
 
@@ -64,7 +75,9 @@ analyzeHeadless <projdir> <projname> -import data/_clear.bin \
 ```
 vmspec/
 ├── vmspec/                    # the Python package
-│   ├── pipeline.py            #   DSE -> state graph -> SLEIGH orchestrator
+│   ├── pipeline.py            #   DSE -> state graph -> IR -> SLEIGH orchestrator
+│   ├── ir.py                  #   independent VM ISA IR
+│   ├── ir_lowering.py         #   analysis AST -> typed IR conversion
 │   ├── dse.py                 #   angr-based handler symbolic execution
 │   ├── state_graph.py         #   state tree -> merged graph
 │   ├── sleigh_gen.py          #   SLEIGH emitter (rolling-key + header/token)
@@ -109,7 +122,7 @@ The target is a stack machine with a per-instruction rolling key. Each opcode is
 - [x] DSE harness for handlers
 - [x] SLEIGH code generation (deterministic skeleton + P-Code semantics)
 - [x] Ghidra disassembly (decrypt-to-clear, phase 6 — both segments, 148 instructions)
-- [ ] Ghidra decompilation (p-code → C) — known limitation (`Bad decompile address`)
+- [ ] Complete, semantically validated Ghidra C decompilation
 
 ## License
 

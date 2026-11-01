@@ -1,7 +1,7 @@
 """Command line entry point: ``python -m vmspec <binary> <config.json>``.
 
 Loads the VM configuration, runs the full pipeline (DSE -> state tree ->
-state graph -> SLEIGH) and writes the resulting ``.slaspec`` to ``--out``
+state graph -> VM ISA IR -> SLEIGH) and writes the resulting ``.slaspec`` to ``--out``
 (or to stdout when ``--out`` is omitted).  A short summary (number of
 handlers and generated spec size in bytes) is printed to stderr.
 """
@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Generate a SLEIGH .slaspec for a VM from a binary and a JSON "
             "configuration file (VMSpec pipeline: DSE -> state tree -> "
-            "state graph -> SLEIGH)."
+            "state graph -> VM ISA IR -> SLEIGH)."
         ),
     )
     parser.add_argument(
@@ -79,6 +79,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "falls back to the 'arch' field of the config file when omitted)"
         ),
     )
+    parser.add_argument("--mode", choices=("rolling", "clear"), default="rolling",
+                        help="opcode encoding for the generated spec")
     return parser
 
 
@@ -111,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         base_addr=base_addr,
         arch=arch,
         dispatch_table=config.dispatch_table,
+        mode=args.mode,
     )
     handlers = config.handlers
 

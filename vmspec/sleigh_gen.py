@@ -1,215 +1,108 @@
-"""SLEIGH processor-spec generation (VMSpec pipeline step 5).
-
-Turns the merged state graph into a minimal ``.slaspec`` document:
-
-* a header with ``define space`` declarations plus one ``define register``
-  per VM state region (the virtual program counter, the virtual stack
-  pointer and the context variables are included);
-* one instruction constructor per opcode handler: the opcode bit-pattern
-  as the constructor pattern and the P-Code semantics translated from the
-  state-graph ops reachable from the handler entry.
-
-The semantics section uses SLEIGH's C-like expression syntax: loads and
-stores as ``*:{size}`` statements, recorded calls as ``call`` statements,
-and symbolic values as temporaries.  Fresh angr values named
-``mem_<addr>_<k>_<bits>`` are re-materialised as the concrete load that
-produced them; anything else is initialised to zero.  Unconditional
-successor edges -- including the final return to the dispatcher -- are
-the constructor's natural fall-through; a symbolic edge emits
-``if (cond) goto 0xADDR;`` with the successor's entry address rendered
-as a constant operand.
-"""
+"""SLEIGH backend for the independent VM ISA IR."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Any, Iterator
 
-from vmspec.model import Call, GraphNode, Handler, MemAccess, RegionKind, VMState
+from .ir import ISA, Block, Call, Expr, Instruction, Read, Write
+from .model import VMState
 
-__all__ = ["encrypt_const", "emit_header", "generate_sleigh", "label"]
+__all__ = ["emit_header", "generate_sleigh", "label"]
 
-# The address space in which each region kind lives.
-_SPACE_BY_KIND: dict[RegionKind, str] = {
-    RegionKind.CODE: "ram",
-    RegionKind.GLOBAL: "ram",
-    RegionKind.STACK: "context",
-    RegionKind.STATE: "context",
-    RegionKind.CONTEXT: "context",
+_BIN_OPS = {
+    "add": "+", "sub": "-", "mul": "*", "and": "&", "or": "|", "xor": "^",
+    "shl": "<<", "lshr": ">>", "ashr": "s>>", "eq": "==", "ne": "!=",
+    "ult": "<", "ule": "<=", "ugt": ">", "uge": ">=",
+    "slt": "s<", "sle": "s<=", "sgt": "s>", "sge": "s>=",
+    "bool_and": "&&", "bool_or": "||", "bool_xor": "^",
 }
 
-# angr names unconstrained-memory fresh variables
-# ``mem_<addr>_<counter>_<bits>`` (lowercase hex); the concrete 32-bit
-# address encoded in that name is a trace-faithful reconstruction of the
-# read that produced the value.
-_MEM_BVS_RE = re.compile(r"^mem_([0-9a-fA-F]+)_(\d+)_(\d+)\Z")
-
-# C-like binary operators accepted by SLEIGH semantics expressions.
-# SLEIGH value expressions require every operand of a binary operator to
-# have the same byte size; the renderer enforces that on the AST.
-_BIN_OPS: dict[str, str] = {
-    "__add__": "+",
-    "__sub__": "-",
-    "__mul__": "*",
-    "__truediv__": "/",
-    "Bvudiv": "/",
-    "Bvsdiv": "/",
-    "__and__": "&",
-    "__or__": "|",
-    "__xor__": "^",
-    "__lshift__": "<<",
-    "__rshift__": ">>",
-    "LShR": ">>",
-    "AShr": ">>",
-    "__eq__": "==",
-    "__ne__": "!=",
-    "__lt__": "<",
-    "__le__": "<=",
-    "__gt__": ">",
-    "__ge__": ">=",
-    "Ult": "<",
-    "Ule": "<=",
-    "Ugt": ">",
-    "Uge": ">=",
-    "Slt": "<",
-    "Sle": "<=",
-    "Sgt": ">",
-    "Sge": ">=",
-    "And": "&",
-    "Or": "|",
-    "Xor": "^",
-}
-
-# C-like unary operators.
-_UNARY_OPS: dict[str, str] = {"__invert__": "~", "__neg__": "-"}
-
-# Identifiers a bit range ``x[lo,count]`` may attach to directly: SLEIGH
-# only accepts a bare varnode there, never an expression.
-_SIMPLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-
-# Explicit arithmetic ops (and their P-Code operand counts) recognised in a
-# node's ``ops`` list: either as bare names (placeholder operands) or as
-# ``(name, *operands)`` tuples (operands rendered as expressions).
-_PCODE_ARITY: dict[str, int] = {
-    "COPY": 2,
-    "INT_ADD": 3,
-    "INT_SUB": 3,
-    "INT_MUL": 3,
-    "INT_DIV": 3,
-    "INT_AND": 3,
-    "INT_OR": 3,
-    "INT_XOR": 3,
-    "INT_ZEXT": 2,
-    "INT_SEXT": 2,
-}
-
-# Rolling-key opcode encryption, the inverse of the in-blob dispatcher's
-# decryption. The dispatcher does:
-#   cl = byte - key; cl += 1; cl = ror8(cl, 4); cl -= 0x85; cl = ~cl; key -= cl
-# Solving for ``byte`` (so a constructor can match the raw byte given the
-# rolling key as context) yields ``byte = rol8(~opcode + 0x85, 4) + key - 1``.
-# ``_encrypt_const`` returns the constant ``rol8(~opcode + 0x85, 4)``, so each
-# constructor's constraint is ``byte = C + key - 1`` (VMSpec §5.1 / §5.4).
 _CONTEXT_REG_NAME = "contextreg"
-
-
-def encrypt_const(opcode: int) -> int:
-    """Return the constant ``C`` such that ``encrypt(op, key) = C + key - 1``."""
-    inv = (0xFF ^ opcode) & 0xFF
-    x = (inv + 0x85) & 0xFF
-    return ((x << 4) | (x >> 4)) & 0xFF  # rol8(x, 4)
 
 
 @dataclass
 class _Render:
-    """Symbolic-value -> SLEIGH temporary name mapping, shared across the
-    whole spec so that every handler renders the same angr value with the
-    same temporary name."""
+    """Translate typed IR expressions; analysis objects never enter the backend."""
 
     reg_names: frozenset[str] = frozenset()
-    _tmp: int = field(default=1, repr=False)
-    _sym: int = field(default=1, repr=False)
-    vars: dict[int, str] = field(default_factory=dict, repr=False)
+    temporaries: frozenset[str] = frozenset()
+    _tmp: int = 1
+    prelude: list[str] = field(default_factory=list)
+    bindings: dict[str, str] = field(default_factory=dict)
 
-    def fresh_tmp(self) -> str:
-        """An unused SLEIGH temporary name (``tmpN``)."""
-        name = f"tmp{self._tmp}"
-        self._tmp += 1
+    def fresh_tmp(self):
+        while True:
+            name = f"tmp{self._tmp}"
+            self._tmp += 1
+            if name not in self.reg_names | self.temporaries:
+                return name
+
+    def temporary(self, expression, size):
+        name = self.fresh_tmp()
+        self.prelude.append(f"local {name}:{size} = {expression};")
         return name
 
-    def fresh_sym(self) -> str:
-        """A fresh unnamed symbol placeholder (``SYNn``)."""
-        name = f"SYN{self._sym}"
-        self._sym += 1
-        return name
-
-    def var_name(self, obj: Any) -> str:
-        """Stable name bound to a produced symbolic value (read variable,
-        call return, ...)."""
-        key = id(obj)
-        name = self.vars.get(key)
-        if name is None:
-            name = self.fresh_tmp()
-            self.vars[key] = name
-        return name
-
-    def render(self, expr: Any) -> str:
-        """Render an opaque expression as a SLEIGH operand placeholder."""
-        if hasattr(expr, "op") and hasattr(expr, "args"):
-            return self.render_ast(expr)
-        if expr is None:
-            return "0x0"
-        if isinstance(expr, bool):
-            return "0x1" if expr else "0x0"
-        if isinstance(expr, int):
-            return f"0x{expr:X}:4"
-        if isinstance(expr, bytes):
-            return f"0x{expr.hex().upper()}:{len(expr)}"
-        if isinstance(expr, (list, tuple)):
-            if not expr:
-                return "0x0"
-            return "[" + ",".join(self.render(e) for e in expr) + "]"
-        if isinstance(expr, str):
-            # Names of defined registers reference the register; anything
-            # else is assumed to be a pre-rendered SLEIGH expression.
-            return expr
-        bound = self.vars.get(id(expr))
-        if bound is not None:
-            return bound
-        # Opaque/unresolved value: render as zero rather than an undefined
-        # placeholder symbol (which SLEIGH would reject).
-        return "0x0:4"
-
-    def render_ast(self, ast: Any) -> str:
-        """Translate a claripy AST into a SLEIGH expression string.
-
-        Constants, symbolic variables, and the arithmetic / bit-manipulation
-        operators are mapped to SLEIGH's C-like expression syntax (which the
-        SLEIGH compiler lowers to P-Code). Ops without a direct equivalent
-        fall back to a fresh placeholder.
-        """
-        op = ast.op
-        args = ast.args
-
-        if op == "BVV":
-            return f"0x{args[0]:X}:{ast.size() // 8}"
-        if op == "BVS":
-            # A fresh ``mem_<addr>_<k>_<bits>`` value is the result of a load
-            # (already assigned a temporary by ``_emit_ops``); any other
-            # symbolic variable is an unconstrained input, rendered as zero.
-            name = ast.args[0]
-            if isinstance(name, str) and _MEM_BVS_RE.match(name):
-                return self.var_name(ast)
-            return "0x0"
-        if op == "BoolV":
-            return "0x1" if args[0] else "0x0"
-
-        # Complex claripy ASTs (arithmetic, bit-manipulation, concat, extract,
-        # rotate, ite) have no guaranteed size-resolvable SLEIGH rendering;
-        # they are emitted as an opaque zero.  Only constants, load results
-        # and booleans are rendered concretely.
-        return "0x0:4"
+    def render(self, expr: Expr):
+        if not isinstance(expr, Expr):
+            raise TypeError("SLEIGH requires IR expressions")
+        op, args = expr.op, expr.args
+        if not expr.is_bool and expr.bits % 8 and op != "extract":
+            raise ValueError("non-byte-sized bitvector operation is not supported")
+        if op == "const":
+            return f"0x{expr.value:X}:{expr.bits // 8}"
+        if op == "bool":
+            return "1:1" if expr.value else "0:1"
+        if op in {"register", "temp"}:
+            names = self.reg_names if op == "register" else self.temporaries
+            if expr.value not in names:
+                raise ValueError(f"unbound IR input: {expr.value}")
+            if op == "register" and expr.bits != 32:
+                raise ValueError("SLEIGH VM registers currently require 32 bits")
+            if op == "temp":
+                if expr.value not in self.bindings:
+                    self.bindings[expr.value] = self.fresh_tmp()
+                return self.bindings[expr.value]
+            return expr.value
+        if op in _BIN_OPS:
+            return "(" + f" {_BIN_OPS[op]} ".join(self.render(a) for a in args) + ")"
+        if op in {"invert", "neg", "not"}:
+            operator = {"invert": "~", "neg": "-", "not": "!"}[op]
+            return f"({operator}{self.render(args[0])})"
+        if op in {"zext", "sext"}:
+            if args[0].bits % 8:
+                raise ValueError("non-byte-sized extension is not supported")
+            return self.temporary(f"{op}({self.render(args[0])})", expr.bits // 8)
+        if op == "extract":
+            if args[0].bits % 8:
+                raise ValueError("extraction from a non-byte-sized value is not supported")
+            value = self.temporary(self.render(args[0]), args[0].bits // 8)
+            return f"{value}[{expr.value},{expr.bits}]"
+        if op == "concat":
+            if any(a.bits % 8 for a in args):
+                raise ValueError("non-byte-sized concatenation is not supported")
+            size, shift, parts = expr.bits // 8, expr.bits, []
+            for arg in args:
+                shift -= arg.bits
+                part = self.temporary(f"zext({self.render(arg)})", size)
+                parts.append(f"({part} << {shift})" if shift else part)
+            return "(" + " | ".join(parts) + ")"
+        if op == "reverse":
+            if expr.bits == 8:
+                return self.render(args[0])
+            parts = tuple(Expr("extract", 8, args, offset) for offset in range(0, expr.bits, 8))
+            return self.render(Expr("concat", expr.bits, parts))
+        if op == "ite":
+            cond = self.render(args[0])
+            size = 1 if expr.is_bool else expr.bits // 8
+            result = self.fresh_tmp()
+            yes_label, end = result + "_yes", result + "_end"
+            self.prelude.extend([f"local {result}:{size};", f"if ({cond}) goto <{yes_label}>;"])
+            no = self.render(args[2])
+            self.prelude.extend([f"{result} = {no};", f"goto <{end}>;", f"<{yes_label}>"])
+            yes = self.render(args[1])
+            self.prelude.extend([f"{result} = {yes};", f"<{end}>"])
+            return result
+        raise ValueError(f"unsupported IR expression in SLEIGH: {op}")
 
 
 def label(raw: str) -> str:
@@ -224,125 +117,82 @@ def _node_label(node_id: int) -> str:
     return f"node_{node_id}"
 
 
-def _body_nodes(graph: GraphNode, start_id: int) -> list[GraphNode]:
-    """Ordered state-graph nodes covering one handler body.
-
-    Starts at the handler graph's root node -- ``start_id``, as recorded in
-    the synthetic root's successors -- and walks successors in order,
-    visiting every node at most once (back-edges therefore terminate the
-    walk).  Resolving the root by its id (instead of scanning for a node
-    whose ``addr`` equals the handler entry) is what keeps a handler body
-    complete: a node from another handler or a collapsed leaf may sit at
-    the same address and would otherwise truncate the walk.
-    """
-    registry: dict[int, GraphNode] = getattr(graph, "_nodes", None) or {
-        graph.id: graph
-    }
-    start = registry.get(start_id) or graph
-    body: list[GraphNode] = []
-    seen: set[int] = set()
-    stack: list[int] = [start.id]
-    while stack:
-        nid = stack.pop()
-        if nid in seen:
+def _body_nodes(instruction: Instruction):
+    registry = {block.id: block for block in instruction.blocks}
+    result, seen, pending = [], set(), [instruction.entry]
+    while pending:
+        node_id = pending.pop()
+        if node_id in seen:
             continue
-        seen.add(nid)
-        node = registry.get(nid)
-        if node is None:
-            continue
-        body.append(node)
-        for obj, tid in reversed(node.successors):
-            if isinstance(obj, GraphNode):
-                registry.setdefault(obj.id, obj)
-                stack.append(obj.id)
-            else:
-                stack.append(tid)
-    return body
+        seen.add(node_id)
+        node = registry[node_id]
+        result.append(node)
+        pending.extend(edge.target for edge in reversed(node.branches))
+    return result
 
 
-def _emit_ops(node: GraphNode, r: _Render, out: list[str]) -> None:
-    """Translate a graph node's ops into C-like SLEIGH semantics."""
-    for op in node.ops:
-        if isinstance(op, MemAccess):
-            if op.kind == "read":
-                dest = r.var_name(op.value)
-                out.append(f"{dest}:{op.size} = *:{op.size} {r.render(op.addr)};")
+def _emit_ops(node: Block, r: _Render, out: list[str]) -> None:
+    for op in node.operations:
+        if isinstance(op, (Read, Write)):
+            if op.endian != "little":
+                raise ValueError("SLEIGH memory effects currently require little endian")
+            if op.address.bits != 32:
+                raise ValueError("SLEIGH addresses currently require 32 bits")
+            addr = r.render(op.address)
+            if isinstance(op, Read):
+                line = f"local {r.render(op.result)}:{op.size} = *:{op.size} {addr};"
             else:
-                out.append(
-                    f"*:{op.size} {r.render(op.addr)} = {r.render(op.value)};"
-                )
+                line = f"*:{op.size} {addr} = {r.render(op.value)};"
         elif isinstance(op, Call):
-            out.append(f"call {r.render(op.target)};")
-        elif isinstance(op, str) and op in _PCODE_ARITY:
-            operands = ",".join(
-                r.fresh_sym() for _ in range(_PCODE_ARITY[op])
-            )
-            out.append(f"{op} {operands};")
-        elif (
-            isinstance(op, (list, tuple))
-            and op
-            and isinstance(op[0], str)
-            and op[0] in _PCODE_ARITY
-        ):
-            operands = ",".join(r.render(x) for x in op[1:])
-            out.append(f"{op[0]} {operands};")
+            if op.target.bits != 32:
+                raise ValueError("SLEIGH call targets currently require 32 bits")
+            line = f"call [{r.render(op.target)}];"
         else:
-            out.append(f"# untranslatable op: {op!r}")
+            raise TypeError("SLEIGH requires IR effects")
+        out.extend(r.prelude)
+        r.prelude.clear()
+        out.append(line)
 
 
-def _const_bool(cond) -> bool | None:
-    """Return the constant truth value of `cond`, or None if symbolic."""
-    if cond is True:
-        return True
-    if cond is False:
-        return False
-    if hasattr(cond, "op") and cond.op == "BoolV":
-        return bool(cond.args[0])
-    return None
+def _const_bool(cond: Expr | None) -> bool | None:
+    return cond.value if cond is not None and cond.op == "bool" else None
 
 
-def _emit_control(node: GraphNode, r: _Render, out: list[str]) -> None:
-    """Emit the control transfer(s) of a graph node."""
-    if not node.successors:
-        return
-    if len(node.successors) == 1 and node.successors[0][0] is None:
-        return  # plain fall-through, nothing to emit
-    for cond, tid in node.successors:
+def _emit_control(node: Block, r: _Render, out: list[str]) -> None:
+    for edge in node.branches:
+        cond, tid = edge.condition, edge.target
         const = _const_bool(cond)
         if cond is None or const is True:
-            out.append(f"goto {_node_label(tid)};")
-        elif const is False:
-            continue  # never-taken branch, nothing to emit
-        else:
-            out.append(f"if ({r.render(cond)}) goto {_node_label(tid)};")
+            out.append(f"goto <{_node_label(tid)}>;")
+            return
+        if const is False:
+            continue
+        expr = r.render(cond)
+        out.extend(r.prelude)
+        r.prelude.clear()
+        out.append(f"if ({expr}) goto <{_node_label(tid)}>;")
+    out.append("goto <handler_end>;")
 
 
-def _emit_body(
-    graph: GraphNode, root_id: int, r: _Render, lines: list[str]
-) -> None:
-    """Emit a handler's state-graph body as C-like SLEIGH semantics.
-
-    Walks the handler graph from *root_id* and emits each node's operations
-    (memory loads/stores, calls and arithmetic).  Control-flow edges are the
-    handler's internal native branches: SLEIGH branch targets are operands
-    (addresses), not labels, and the rolling-key context does not flow across
-    them (``docs/SLEIGH.md`` §10 / §11), so they are deliberately left out of
-    the body.  The final ``jmp`` into the dispatcher is the implicit
-    fall-through that ends the instruction, so it needs no explicit statement.
-    """
-    for node in _body_nodes(graph, root_id):
+def _emit_body(instruction: Instruction, r: _Render, lines: list[str]) -> None:
+    body = _body_nodes(instruction)
+    targets = {instruction.entry}
+    for node in body:
+        for edge in node.branches:
+            if _const_bool(edge.condition) is not False:
+                targets.add(edge.target)
+            if edge.condition is None or _const_bool(edge.condition) is True:
+                break
+    lines.append(f"goto <{_node_label(instruction.entry)}>;")
+    for node in body:
+        if node.id in targets:
+            lines.append(f"<{_node_label(node.id)}>")
         _emit_ops(node, r, lines)
+        _emit_control(node, r, lines)
+    lines.append("<handler_end>")
 
 
-def _opcode_pattern(opcode: int) -> str:
-    """Least-significant opcode bytes as a comma-separated SLEIGH pattern."""
-    width = max(1, (opcode.bit_length() + 7) // 8)
-    return ",".join(
-        f"0x{(opcode >> (8 * i)) & 0xFF:02X}" for i in range(width - 1, -1, -1)
-    )
-
-
-def emit_header(lines: list[str], vm_state: VMState, *, with_context: bool = True) -> None:
+def emit_header(lines: list[str], vm_state: VMState | ISA, *, with_context: bool = True) -> None:
     """Emit the structural parts of a SLEIGH spec into *lines*.
 
     Covers the endianness/alignment, the address spaces, the instruction token
@@ -394,97 +244,55 @@ def emit_header(lines: list[str], vm_state: VMState, *, with_context: bool = Tru
     lines.append("")
 
 
-def generate_sleigh(
-    graph: GraphNode,
-    vm_state: VMState,
-    handlers: list[Handler],
-    dispatch_table: list[int] | None = None,
-) -> str:
-    """Generate a minimal SLEIGH ``.slaspec`` for the VM described by
-    *vm_state*.
+def _pattern(expr: Expr) -> str:
+    """Render the supported decode-time expression subset."""
+    if expr.op == "const":
+        return f"0x{expr.value:02X}"
+    if expr.op == "context" and expr.value == "key" and expr.bits == 8:
+        return "key"
+    if expr.op in {"add", "sub"}:
+        return "(" + f" {'+' if expr.op == 'add' else '-'} ".join(_pattern(a) for a in expr.args) + ")"
+    raise ValueError(f"unsupported encoding/context expression: {expr.op}")
 
-    When *dispatch_table* (a 256-entry ``opcode -> handler entry`` map) is
-    given, one constructor is emitted per table index: the dispatcher's
-    rolling-key update is ``key -= opcode`` (per-index, not per-handler), so
-    several indices can share a handler body while still advancing the key by
-    their own value.  Without a table, one constructor is emitted per handler
-    using its canonical opcode.
 
-    *graph* must be the synthetic root produced by the pipeline: its
-    successors are one per handler graph (in the order of *handlers*), so
-    each constructor's body is walked from its handler graph's root.
+def generate_sleigh(isa: ISA) -> str:
+    """Generate SLEIGH from VM ISA IR only.
+
+    The backend currently emits opcode-only instructions. Known operand
+    encodings outside that subset fail explicitly; unknown encodings remain
+    marked as such in the specification.
     """
-    # Registry of usable register names (for resolving symbolic references).
-    reg_names: set[str] = {vm_state.vpc}
-    if vm_state.vsp is not None:
-        reg_names.add(vm_state.vsp)
-    for name in vm_state.context:
-        reg_names.add(name)
-    for region in vm_state.regions:
-        reg_names.add(region.name)
-
-    lines: list[str] = []
-    lines.append("# VMSpec auto-generated processor specification (.slaspec)")
-    lines.append("# Pipeline: DSE -> state tree -> state graph -> SLEIGH")
-    lines.append("# Reference: arXiv:2610.29566")
-    lines.append("")
-    emit_header(lines, vm_state)
-
-    # Handler constructors.
-    r = _Render(reg_names=frozenset(reg_names))
-    used_labels: set[str] = set()
-    # Map handler entry address -> handler, for resolving table indices.
-    analyzed_by_entry: dict[int, Handler] = {
-        handler.entry: handler for handler in handlers
-    }
-    # Map handler entry address -> its state-graph root id.  The synthetic
-    # root's successors are one per analysed handler, in the same order as
-    # `handlers` (see pipeline._merge_handler_graphs).
-    entry_to_root: dict[int, int] = {
-        handler.entry: root_id
-        for handler, (_, root_id) in zip(handlers, graph.successors)
-    }
-
-    def _emit_ctor(opcode: int, handler: Handler | None) -> None:
-        """Emit one constructor: pattern ``byte = C + key - 1`` and the
-        rolling-key update ``key -= opcode``."""
-        mnemonic = handler.mnemonic if handler is not None else ""
-        base = label(mnemonic) if mnemonic else f"op_{opcode:02X}"
+    if not isinstance(isa, ISA):
+        raise TypeError("generate_sleigh requires VM ISA IR")
+    with_context = any(i.context_updates or any(e.op == "context" for e in i.expressions) for i in isa.instructions)
+    names = frozenset(n for n in (isa.vpc, isa.vsp) if n is not None)
+    lines = [
+        "# VMSpec processor specification (.slaspec)",
+        "# Pipeline: DSE -> state graph -> VM ISA IR -> SLEIGH",
+        "",
+    ]
+    emit_header(lines, isa, with_context=with_context)
+    used_labels = set()
+    for instruction in isa.instructions:
+        if instruction.operands or instruction.encoding.length not in (None, 1):
+            raise ValueError("operand encoding lowering is not implemented")
+        base = label(instruction.mnemonic) if instruction.mnemonic else f"op_{instruction.opcode:02X}"
         name, k = base, 1
         while name in used_labels:
             name = f"{base}_{k}"
             k += 1
         used_labels.add(name)
-        if handler is not None:
-            lines.append(
-                f"# opcode=0x{opcode:02X} -> {handler.mnemonic} "
-                f"entry=0x{handler.entry:X}"
-            )
-        else:
-            lines.append(f"# opcode=0x{opcode:02X} (unanalysed handler)")
-        c = encrypt_const(opcode)
-        lines.append(
-            f":{name} is byte = 0x{c:X} + key - 1 "
-            f"[ key = key - 0x{opcode:02X}; globalset(inst_next, key); ] {{"
-        )
-        root_id = entry_to_root.get(handler.entry) if handler is not None else None
-        if root_id is not None:
-            _emit_body(graph, root_id, r, lines)
-        else:
-            # Unanalysed handler: no state graph, emit an explicit fall-through
-            # so the disassembler still advances to the next instruction.
-            lines.append("  goto inst_next;")
-        lines.append("}")
-        lines.append("")
-
-    if dispatch_table is None:
-        # Legacy fallback: one constructor per analysed handler, keyed on its
-        # canonical opcode.
-        for handler in handlers:
-            _emit_ctor(handler.opcode, handler)
-    else:
-        # Table-based dispatch: one constructor per opcode index (0..255).
-        for opcode in range(256):
-            _emit_ctor(opcode, analyzed_by_entry.get(dispatch_table[opcode]))
-
+        lines.append(f"# opcode=0x{instruction.opcode:02X}")
+        if instruction.operands is None or instruction.encoding.length is None:
+            lines.append("# Operand encoding unresolved; opcode-only constructor.")
+        updates = []
+        for update in instruction.context_updates:
+            if update.name != "key" or update.value.bits != 8:
+                raise ValueError("unsupported context field")
+            updates.append(f"key = {_pattern(update.value)}; globalset(inst_next, key);")
+        action = "[ " + " ".join(updates) + " ] " if updates else ""
+        lines.append(f":{name} is byte = {_pattern(instruction.encoding.opcode)} {action}{{")
+        renderer = _Render(names, frozenset(read.result.value for read in instruction.reads))
+        _emit_body(instruction, renderer, lines)
+        lines.extend(("}", ""))
     return "\n".join(lines).rstrip() + "\n"

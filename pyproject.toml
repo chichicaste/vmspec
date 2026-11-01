@@ -1,7 +1,7 @@
 [project]
 name = "vmspec"
 version = "0.1.0"
-description = "VM deobfuscation via automated SLEIGH spec generation (VMSpec implementation)"
+description = "Experimental VM deobfuscation via automated SLEIGH spec generation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }

@@ -12,20 +12,10 @@ state, so each path accumulates its own memory ops and calls.
 from __future__ import annotations
 
 import angr
+import claripy
 
 from .memory import install
 from .model import Call, Handler, StateNode, VMState
-
-# Dispatcher zone inside the blob.  ``DISPATCHER`` in :mod:`tools.gen_config`
-# (0x1AE1198) is the main dispatcher entry, but some handlers terminate by
-# jumping into variant entries (e.g. 0x1AE1193) that share the same block.
-# The whole block spans [0x1AE1193, 0x1AE11B4); the next handler
-# ("shrd") starts at 0x1AE11B5.  Treating the entire zone as "end" keeps any
-# state out of the dispatcher, whose tail ``jmp`` targets a symbolically
-# indexed table and would explode the path count (one indirect jump per
-# state, each expanded into 256 solutions).
-DISPATCHER_RANGE: tuple[int, int] = (0x1AE1193, 0x1AE11B4)
-
 
 def analyze_handler(
     project: angr.Project,
@@ -34,51 +24,46 @@ def analyze_handler(
     *,
     max_steps: int = 100_000,
 ) -> StateNode | None:
-    """Symbolically execute `handler` and return its state tree.
+    """Explore a handler using configured boundaries and segmented memory.
 
-    The initial state is created at ``handler.entry`` with the
-    no-concretization memory model installed. Exploration is bounded by
-    ``max_steps``: since every handler ends with an absolute ``jmp`` into
-    the in-blob dispatcher, one step per iteration is followed by moving
-    the states parked in the dispatcher zone (``DISPATCHER_RANGE``) into the
-    ``found`` stash; exploration stops when no state is left active or the
-    budget runs out (remaining paths are kept as truncated leaves).
-
-    ``handler.end`` (0x1AE1198) is the canonical dispatcher entry recorded
-    in the config, but some handlers jump into a different entry of the
-    same dispatcher block; the range check accepts the whole zone.
-
-    ``vm_state`` is currently informational (it describes the VM registers and
-    regions); the handler boundaries drive the exploration.
+    Incomplete paths are rejected; they must never become apparently complete
+    instruction semantics.
     """
+    if max_steps <= 0:
+        raise ValueError("max_steps must be positive")
+    if project.arch.bits != 32 or project.arch.memory_endness != "Iend_LE":
+        raise ValueError("the current SLEIGH backend requires a 32-bit little-endian target")
     init = project.factory.blank_state(addr=handler.entry)
-    install(init)
+    initial_registers = {}
+    for name in [vm_state.vpc, vm_state.vsp, *vm_state.context]:
+        if name in project.arch.registers:
+            _, width = project.arch.registers[name]
+            if width != 4:
+                raise ValueError(f"VM register {name} must be 32 bits")
+            initial_registers[name] = claripy.BVS(name, width * 8, explicit_name=True)
+            setattr(init.regs, name, initial_registers[name])
+    install(init, vm_state=vm_state)
 
     def on_call(state):
         # Resolve the per-state recorder from the state itself: inspect
         # breakpoints are copied to forked states, so the original
         # instance returned by :func:`install` only sees the initial state.
         target = state.inspect.function_address
-        state.vmspec_recorder.calls.append(Call(state.addr, target))
+        state.vmspec_recorder.record(Call(state.addr, target))
+        raise NotImplementedError("native calls require specialized semantics")
 
     init.inspect.b("call", when=angr.BP_BEFORE, action=on_call)
 
     simgr = project.factory.simulation_manager(init)
 
     def reached_end(s: angr.SimState) -> bool:
-        """True when `s` has reached the dispatcher zone.
-
-        The dispatcher zone spans one straight-line block, so an exact
-        match on ``handler.end`` would miss states that enter the block
-        through a different instruction (e.g. the variant at 0x1AE1193)
-        and let them execute the dispatcher's symbolic table jump.  A
-        state whose IP is symbolic is not considered at the end either.
-        """
         try:
             addr = s.addr
         except angr.SimValueError:
             return False
-        return DISPATCHER_RANGE[0] <= addr < DISPATCHER_RANGE[1]
+        return addr == handler.end or any(
+            base <= addr < base + size for base, size in vm_state.dispatcher_ranges
+        )
 
     # Step-by-step exploration bounded by the budget.  ``explore`` alone
     # keeps stepping states past the terminator (they jump into the
@@ -86,70 +71,71 @@ def analyze_handler(
     # iteration moves the states parked in the dispatcher zone out of
     # ``active`` into ``found`` before they can fall further into the blob.
     for _ in range(max_steps):
+        simgr.move("active", "found", reached_end)
         if not simgr.active:
             break
-        simgr.step()
+        simgr.step(extra_stop_points={handler.end, *(base for base, _ in vm_state.dispatcher_ranges)})
         simgr.move("active", "found", reached_end)
         if not simgr.active:
             break
 
-    # Whatever is still active at the budget becomes a truncated leaf.
-    truncated = simgr.stashes.setdefault("truncated", [])
-    truncated.extend(simgr.active)
-    simgr.active.clear()
-
-    leaves = simgr.deadended + simgr.found + truncated
-    return _build_tree(leaves, entry=handler.entry)
+    if simgr.active or simgr.errored or simgr.unconstrained or simgr.deadended:
+        raise RuntimeError(
+            f"handler 0x{handler.entry:X}: incomplete DSE "
+            f"(active={len(simgr.active)}, errors={len(simgr.errored)}, "
+            f"unconstrained={len(simgr.unconstrained)}, deadended={len(simgr.deadended)})"
+        )
+    for leaf in simgr.found:
+        for name, initial in initial_registers.items():
+            if not leaf.solver.is_true(getattr(leaf.regs, name) == initial):
+                raise NotImplementedError(f"VM register update {name} requires register-effect lowering")
+    return _build_tree(simgr.found, entry=handler.entry)
 
 
 def _build_tree(leaves: list[angr.SimState], *, entry: int) -> StateNode | None:
-    """Reconstruct a :class:`StateNode` tree from leaf states' histories.
+    """Build a prefix tree of ordered events and outgoing branch guards.
 
-    Common prefixes of the execution lineages are shared, so branching points
-    become interior nodes and each leaf keeps its accumulated memory ops and
-    calls. Branch conditions are taken from ``history.jump_guard``.
-
-    Node addresses come from ``history.addr`` (start of the last basic block
-    executed by that step). The lineage's first history is the initial state's
-    history, which has not executed any block yet and therefore reports
-    ``None``; the root node is given ``entry`` (the initial instruction
-    pointer) instead.
+    A history's guard selects the state *after* its events. Event identities
+    survive angr forks, so loads before a branch are shared and precede the
+    guard that uses their result.
     """
     if not leaves:
         return None
-
-    nodes: dict[int, StateNode] = {}
-    root: StateNode | None = None
-
+    root = StateNode(addr=entry)
+    nodes = {}
     for leaf in leaves:
-        lineage: list[angr.SimStateHistory] = []
+        lineage = []
         h = leaf.history
         while h is not None:
             lineage.append(h)
             h = h.parent
-        lineage.reverse()  # root -> leaf
-
-        rec = getattr(leaf, "vmspec_recorder", None)
-        leaf_ops = list(rec.mem_ops) if rec else []
-        leaf_calls = list(rec.calls) if rec else []
-
-        prev: StateNode | None = None
-        for depth, h in enumerate(lineage):
-            is_leaf = depth == len(lineage) - 1
-            key = id(h)
+        prev = root
+        for h in reversed(lineage):
+            for event in h.recent_events:
+                if event.type != "vmspec":
+                    continue
+                key = (id(prev), "event", event.id)
+                node = nodes.get(key)
+                if node is None:
+                    op = event.objects["operation"]
+                    node = StateNode(addr=event.ins_addr or h.addr or entry)
+                    if isinstance(op, Call):
+                        node.calls.append(op)
+                    else:
+                        node.mem_ops.append(op)
+                    prev.successors.append(node)
+                    nodes[key] = node
+                prev = node
+            guard = h.jump_guard
+            if guard is None:
+                continue
+            target = h.jump_target
+            key = (id(prev), "edge", id(guard), id(target))
             node = nodes.get(key)
             if node is None:
-                node = StateNode(
-                    addr=h.addr if h.addr is not None else entry,
-                    mem_ops=leaf_ops if is_leaf else [],
-                    calls=leaf_calls if is_leaf else [],
-                )
-                if prev is not None:
-                    node.cond = getattr(h, "jump_guard", None)
-                    prev.successors.append(node)
-                else:
-                    root = node
+                addr = target.args[0] if getattr(target, "op", None) == "BVV" else h.addr
+                node = StateNode(addr=addr or entry, cond=guard)
+                prev.successors.append(node)
                 nodes[key] = node
             prev = node
-
     return root

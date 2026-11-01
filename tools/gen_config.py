@@ -138,6 +138,7 @@ def build_vm_state() -> dict:
             {"name": "stack", "kind": "stack"},
         ],
         "context": ["key"],
+        "dispatcher_ranges": [[0x1AE1193, 0x21]],
         "entry": ENGINE + BC_OFF,
         "base_addr": ENGINE,
         "arch": "x86",

@@ -12,7 +12,7 @@ handlers here additionally touch the low 16 bits (``push_u16``) or the full
 """
 from __future__ import annotations
 
-__all__ = ["rol8", "ror8", "decrypt_operand", "handler_key_update"]
+__all__ = ["rol8", "ror8", "encrypt_const", "decrypt_operand", "handler_key_update"]
 
 
 def ror8(x: int, n: int) -> int:
@@ -23,6 +23,11 @@ def ror8(x: int, n: int) -> int:
 def rol8(x: int, n: int) -> int:
     x &= 0xFF
     return ((x << n) | (x >> (8 - n))) & 0xFF
+
+
+def encrypt_const(opcode: int) -> int:
+    """Sample opcode encoding: encrypted byte = C + key - 1."""
+    return rol8(((0xFF ^ opcode) + 0x85) & 0xFF, 4)
 
 
 def _formula_a(al: int, key: int) -> int:

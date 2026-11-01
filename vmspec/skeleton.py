@@ -23,7 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .model import Handler, VMState
-from .sleigh_gen import emit_header, encrypt_const, label
+from .sleigh_gen import emit_header, label
+from .operand import encrypt_const
 
 __all__ = ["ConstructorInfo", "generate_skeleton"]
 

@@ -175,14 +175,29 @@ The semantic section uses C-like syntax; raw P-Code opcodes (`LOAD`, `STORE`,
 r1 = *:2 r2;          # LOAD 2 bytes from r2
 *:2 r1 = r2;          # STORE 2 bytes to r1
 tmp:4 = r2 + 4;       # named temporary (explicit size)
-if (cond) goto addr;  # conditional branch — target is an OPERAND, not a label
+if (cond) goto addr;  # branch to an instruction address
 goto addr;            # unconditional branch
 call target;
 ```
 
-There are no C-style `label:` + `goto label;` blocks: **branch targets are
-operands** (family symbols that evaluate to an address). `local tmp = ...`
-declares a named temporary.
+C-style `label:` declarations are invalid. SLEIGH does support local
+P-Code labels using angle brackets:
+
+```sleigh
+if (cond) goto <taken>;
+*:4 VSP = 1;
+goto <done>;
+<taken>
+*:4 VSP = 2;
+<done>
+```
+
+These branches remain inside one instruction's semantics. They are distinct
+from branches to VM instruction addresses and do not require disassembly
+context propagation. Each declared label must be referenced.
+See [SLEIGH §7.7.2.6](https://ghidra.re/ghidra_docs/languages/html/sleigh_constructors.html).
+The generated branch regression compiles this mechanism and compares its
+P-Code behavior with a native x86 handler.
 
 ## 11. What the paper leaves implicit (needs expansion)
 
@@ -261,10 +276,9 @@ cfb:1 = (tmpt < tmpa);
 cf:4  = zext(cfb);
 ```
 
-**`if` only accepts `goto`.** `if (cond) cf = 0;` does not parse
-(`missing KEY_GOTO, unexpected IDENTIFIER`), and there are no labels to
-jump to inside a constructor body. A conditional flag value must be
-selected branchless; e.g. the SHL carry (bit `32-sh` of the operand, 0
+**`if` only accepts `goto`.** `if (cond) cf = 0;` does not parse.
+Use the local labels described in §10, or select the value with a branchless
+expression. For example, the SHL carry (bit `32-sh` of the operand, 0
 when `sh == 0`):
 
 ```sleigh
@@ -274,7 +288,7 @@ kmsk:4 = 0x1:4 ^ (kn >> 5);    # 0 exactly when sh == 0
 cf:4   = ((eax >> kcl) & 1) & kmsk;
 ```
 
-**Parity.** Constructor bodies have no loops; PF (even parity of the low
+**Parity.** The reference constructors use no loops; PF (even parity of the low
 byte) is an XOR fold — bit 0 of `r ^ (r>>1) ^ ... ^ (r>>7)` is the
 odd-parity indicator, so `pf = (fold & 1) ^ 1`.
 

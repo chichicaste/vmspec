@@ -21,7 +21,7 @@ with the list of opcode handlers the pipeline should analyse.  Example::
 ``vpc`` and a non-empty ``handlers`` list are mandatory; every handler must
 carry integer ``entry`` and ``end`` addresses (and an integer ``opcode``).
 Region ``kind`` must be one of the :class:`vmspec.model.RegionKind` values
-(``"code"``, ``"stack"``, ``"state"``, ``"context"``, ``"global"``).
+(``"code"``, ``"stack"``, ``"state"``, ``"context"``, ``"global"``, ``"readonly"``).
 ``bytecode``, when present, is a hex-encoded string.
 
 The optional ``base_addr`` field (an integer in decimal form or a hex string
@@ -111,6 +111,7 @@ def load_config(path: str) -> Config:
         context=_parse_context(raw.get("context", [])),
         entry=_parse_optional_int(raw.get("entry"), "entry"),
         bytecode=_parse_bytecode(raw.get("bytecode")),
+        dispatcher_ranges=_parse_dispatcher_ranges(raw.get("dispatcher_ranges", [])),
     )
     return Config(
         vm_state=vm_state,
@@ -289,3 +290,13 @@ def _parse_handlers(raw: Any) -> list[Handler]:
             )
         )
     return handlers
+
+def _parse_dispatcher_ranges(value):
+    if not isinstance(value, list):
+        raise ValueError("dispatcher_ranges must be a list of [base, size] pairs")
+    for pair in value:
+        if (not isinstance(pair, list) or len(pair) != 2
+                or any(type(x) is not int for x in pair)
+                or pair[0] < 0 or pair[1] <= 0):
+            raise ValueError("dispatcher_ranges requires nonnegative base and positive size")
+    return [tuple(pair) for pair in value]

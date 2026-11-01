@@ -4,7 +4,7 @@ Defines the structures produced by the DSE-based analysis of VM handlers:
 the virtual state layout (:class:`VMState`, :class:`Region`,
 :class:`RegionKind`), handler metadata (:class:`Handler`), the symbolic
 state tree (:class:`StateNode`, :class:`MemAccess`, :class:`Call`) and the
-merged state graph (:class:`GraphNode`) consumed by the SLEIGH generator.
+merged state graph (:class:`GraphNode`) consumed by the VM ISA IR adapter.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ class RegionKind(str, Enum):
     STATE = "state"
     CONTEXT = "context"
     GLOBAL = "global"
+    READONLY = "readonly"
 
 
 @dataclass
@@ -56,6 +57,9 @@ class VMState:
             instructions (decoding state, encryption registers, ...).
         entry: Host address of the VM entry point, when known.
         bytecode: Raw contents of the bytecode region, when available.
+        dispatcher_ranges: Optional (base, size) native dispatcher boundaries.
+            Native vpc/vsp names initialize matching registers symbolically;
+            abstract names still require a frontend binding.
     """
 
     vpc: str
@@ -64,6 +68,7 @@ class VMState:
     context: list[str] = field(default_factory=list)
     entry: int | None = None
     bytecode: bytes | None = None
+    dispatcher_ranges: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
@@ -83,17 +88,18 @@ class MemAccess:
     Attributes:
         kind: ``"read"`` or ``"write"``.
         addr: Opaque symbolic address expression.
-        value: Opaque symbolic value expression.  For a *read* this is the
-            fresh variable produced by the access (each read yields its own
-            variable under the VMSpec memory model); for a *write* it is the
-            stored value.
+        value: Read result or stored symbolic value.
         size: Number of bytes accessed.
+        forwarded: A cached or readonly value, not a fresh load definition.
+        endness: Byte order of this access.
     """
 
     kind: str
     addr: object
     value: object
     size: int
+    forwarded: bool = False
+    endness: str = "Iend_LE"
 
     def __post_init__(self) -> None:
         if self.kind not in ("read", "write"):
