@@ -15,7 +15,9 @@ import angr
 import claripy
 
 from .memory import install
-from .model import Call, Handler, StateNode, VMState
+from .model import Call, ContextAssumption, Handler, RegisterAccess, StateNode, VMState
+
+_CONTEXT_STATE_THRESHOLD = 100
 
 def analyze_handler(
     project: angr.Project,
@@ -45,12 +47,21 @@ def analyze_handler(
     install(init, vm_state=vm_state)
 
     def on_call(state):
-        # Resolve the per-state recorder from the state itself: inspect
-        # breakpoints are copied to forked states, so the original
-        # instance returned by :func:`install` only sees the initial state.
         target = state.inspect.function_address
-        state.vmspec_recorder.record(Call(state.addr, target))
-        raise NotImplementedError("native calls require specialized semantics")
+        if isinstance(target, int):
+            targets = [target]
+        else:
+            targets = state.solver.eval_upto(target, 2)
+        if len(targets) != 1 or project.loader.find_object_containing(targets[0]) is None:
+            raise NotImplementedError("symbolic or external calls require specialized semantics")
+        _concretize_unique_context([state], vm_state.context)
+        if any(
+            getattr(state.regs, name).symbolic
+            for name in vm_state.context if name in state.arch.registers
+        ):
+            raise NotImplementedError("native calls require a concrete VM context")
+        # Execute in-binary native code in this concrete context and lower its
+        # observed memory/register effects inline into the VM handler.
 
     init.inspect.b("call", when=angr.BP_BEFORE, action=on_call)
 
@@ -74,6 +85,8 @@ def analyze_handler(
         simgr.move("active", "found", reached_end)
         if not simgr.active:
             break
+        if len(simgr.active) > _CONTEXT_STATE_THRESHOLD:
+            _concretize_unique_context(simgr.active, vm_state.context)
         simgr.step(extra_stop_points={handler.end, *(base for base, _ in vm_state.dispatcher_ranges)})
         simgr.move("active", "found", reached_end)
         if not simgr.active:
@@ -87,9 +100,36 @@ def analyze_handler(
         )
     for leaf in simgr.found:
         for name, initial in initial_registers.items():
-            if not leaf.solver.is_true(getattr(leaf.regs, name) == initial):
+            recorded = any(op.register == name for op in leaf.vmspec_recorder.register_ops)
+            if not leaf.solver.is_true(getattr(leaf.regs, name) == initial) and not recorded:
                 raise NotImplementedError(f"VM register update {name} requires register-effect lowering")
     return _build_tree(simgr.found, entry=handler.entry)
+
+
+def _concretize_unique_context(states, names) -> int:
+    """Replace only solver-unique context values, preserving their path guard."""
+    specialized = 0
+    for state in states:
+        for name in names:
+            if name not in state.arch.registers:
+                continue
+            value = getattr(state.regs, name)
+            if not value.symbolic:
+                continue
+            solutions = state.solver.eval_upto(value, 2)
+            if len(solutions) != 1:
+                continue
+            concrete = claripy.BVV(solutions[0], value.size())
+            state.add_constraints(value == concrete)
+            state.history.add_event(
+                "vmspec", operation=ContextAssumption(value == concrete)
+            )
+            offset, size = state.arch.registers[name]
+            state.registers.store(
+                offset, concrete, size=size, endness=state.arch.register_endness, inspect=False
+            )
+            specialized += 1
+    return specialized
 
 
 def _build_tree(leaves: list[angr.SimState], *, entry: int) -> StateNode | None:
@@ -121,6 +161,10 @@ def _build_tree(leaves: list[angr.SimState], *, entry: int) -> StateNode | None:
                     node = StateNode(addr=event.ins_addr or h.addr or entry)
                     if isinstance(op, Call):
                         node.calls.append(op)
+                    elif isinstance(op, RegisterAccess):
+                        node.register_ops.append(op)
+                    elif isinstance(op, ContextAssumption):
+                        node.cond = op.condition
                     else:
                         node.mem_ops.append(op)
                     prev.successors.append(node)

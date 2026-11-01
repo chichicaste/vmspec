@@ -6,7 +6,7 @@ from collections.abc import Callable
 import claripy
 
 from . import ir
-from .model import Call, GraphNode, Handler, MemAccess, VMState
+from .model import Call, GraphNode, Handler, MemAccess, RegisterAccess, VMState
 
 
 _OPS = {
@@ -97,17 +97,51 @@ def _vpc_offset(address, vpc_name):
 def _operand_reads(nodes, vpc_name):
     candidates = [(op, _vpc_offset(op.addr, vpc_name)) for node in nodes for op in node.ops
                   if isinstance(op, MemAccess) and op.kind == "read" and not op.forwarded]
-    candidates = [(op, offset) for op, offset in candidates if offset is not None and offset >= 0]
-    if len(candidates) != 1:
+    candidates = [(op, offset) for op, offset in candidates if offset is not None and offset >= 1]
+    if not candidates:
         return None
-    read, relative = candidates[0]
-    if read.size not in (1, 2, 4) or not isinstance(read.value, claripy.ast.BV) or read.value.op != "BVS":
+    inferred = []
+    variables = set()
+    consumers = [
+        expr
+        for node in nodes
+        for expr in (
+            [value for op in node.ops for value in (
+                (op.addr, op.value) if isinstance(op, MemAccess) else
+                (op.value,) if isinstance(op, RegisterAccess) else
+                (op.target,) if isinstance(op, Call) else ()
+            )]
+            + [condition for condition, _ in node.successors if condition is not None]
+        )
+    ]
+    for read, relative in candidates:
+        if not isinstance(read.value, claripy.ast.BV) or read.value.op != "BVS":
+            continue
+        variable = read.value.args[0]
+        if not any(variable in getattr(expr, "variables", ()) for expr in consumers):
+            continue
+        if read.size not in (1, 2, 4) or variable in variables:
+            return None
+        variables.add(variable)
+        decoded = next((op.value for node in nodes for op in node.ops if isinstance(op, MemAccess)
+                        and op.kind == "write" and variable in getattr(op.value, "variables", ())), read.value)
+        inferred.append((read, relative, decoded))
+    if not inferred:
         return None
-    variable = read.value.args[0]
-    # shortcut: use the first write consuming this read; add taint-based output selection for multi-use operands.
-    decoded = next((op.value for node in nodes for op in node.ops if isinstance(op, MemAccess)
-                    and op.kind == "write" and variable in getattr(op.value, "variables", ())), None)
-    return None if decoded is None else (read, relative + 1, decoded)
+    inferred.sort(key=lambda item: item[1])
+    if len({offset for _, offset, _ in inferred}) != len(inferred):
+        return None
+    cursor = 1
+    for read, offset, _ in inferred:
+        if offset != cursor:
+            return None
+        cursor += read.size
+    return tuple(inferred)
+
+
+def _operand_name(index, size):
+    field = {1: "op1", 2: "op2", 4: "op4"}[size]
+    return field if index == 0 else f"{field}_{index + 1}"
 
 
 def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opcode=None,
@@ -120,13 +154,18 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opco
     operands = None
     operand_symbols = {}
     if inferred is not None:
-        read, offset, _ = inferred
-        name = {1: "op1", 2: "op2", 4: "op4"}[read.size]
-        operand_symbols[read.value.args[0]] = ir.Expr("operand", read.size * 8, value=name)
-        operands = (ir.Operand(name, offset, read.size, operand_symbols[read.value.args[0]]),)
+        operands = tuple(
+            ir.Operand(
+                _operand_name(index, read.size), offset, read.size,
+                operand_symbols.setdefault(
+                    read.value.args[0], ir.Expr("operand", read.size * 8, value=_operand_name(index, read.size))
+                ),
+            )
+            for index, (read, offset, _) in enumerate(inferred)
+        )
     symbols = {
         name: ir.Expr("register", 32, value=name)
-        for name in (vm_state.vpc, vm_state.vsp) if name is not None
+        for name in (vm_state.vpc, vm_state.vsp, *vm_state.context) if name is not None
     }
     count = 0
     for node in nodes:
@@ -146,7 +185,7 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opco
             if isinstance(op, MemAccess):
                 if op.kind == "read" and op.forwarded:
                     continue
-                if inferred is not None and op is inferred[0]:
+                if inferred is not None and any(op is read for read, _, _ in inferred):
                     continue
                 if op.endness not in {"Iend_LE", "Iend_BE"}:
                     raise ValueError("unknown memory byte order")
@@ -156,6 +195,10 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opco
                 operations.append(cls(addr, value, op.size, "little" if op.endness == "Iend_LE" else "big"))
             elif isinstance(op, Call):
                 operations.append(ir.Call(lower_expression(op.target, symbols), op.site))
+            elif isinstance(op, RegisterAccess):
+                operations.append(ir.RegisterWrite(
+                    op.register, lower_expression(op.value, symbols, bits=op.size * 8)
+                ))
             else:
                 raise ValueError(f"unsupported state-graph operation: {op!r}")
         branches = tuple(ir.Branch(ids[target], lower_expression(cond, symbols) if cond is not None else None)
@@ -169,11 +212,14 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opco
         if not isinstance(raw_opcode, ir.Expr) or any(not isinstance(u, ir.ContextUpdate) for u in updates):
             raise TypeError("opcode_encoder must return an IR expression and context-update tuple")
     if inferred is not None:
-        read, offset, decoded = inferred
-        name = operands[0].name
-        decoded_value = lower_expression(decoded, symbols, bits=read.size * 8)
-        operands = (ir.Operand(name, offset, read.size, decoded_value),)
-        length = offset + read.size
+        operands = tuple(
+            ir.Operand(
+                _operand_name(index, read.size), offset, read.size,
+                lower_expression(decoded, symbols, bits=read.size * 8),
+            )
+            for index, (read, offset, decoded) in enumerate(inferred)
+        )
+        length = max(offset + read.size for read, offset, _ in inferred)
     else:
         length = None
     return ir.Instruction(opcode, ir.Encoding(raw_opcode, length), ids[graph.id], tuple(blocks),
@@ -197,4 +243,10 @@ def lower_isa(
             h, g = by_entry[entry]
             instructions.append(lower_handler(h, g, vm_state, opcode=opcode, opcode_encoder=opcode_encoder))
         instructions = tuple(instructions)
-    return ir.ISA(vm_state.vpc, vm_state.vsp, instructions)
+    registers = tuple(sorted(
+        set(vm_state.context) |
+        {op.register for instruction in instructions
+         for block in instruction.blocks for op in block.operations
+         if isinstance(op, ir.RegisterWrite)}
+    ))
+    return ir.ISA(vm_state.vpc, vm_state.vsp, instructions, registers)

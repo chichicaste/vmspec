@@ -16,7 +16,7 @@ An external VM challenge for future frontend work is indexed in the
 ## Pipeline
 
 1. **Configuration** - `vmspec/config.py` loads frontend-provided VM state and handler metadata; automatic detection is frontend-specific.
-2. **DSE** — `vmspec/dse.py` symbolically executes each handler with angr, recording memory accesses and calls.
+2. **DSE** — `vmspec/dse.py` symbolically executes handlers and records memory/register effects and branches. Direct in-binary calls are analyzed inline only when their targets and configured context are concrete; external or symbolic calls fail explicitly.
 3. **State graph** — `vmspec/state_graph.py` merges each handler's DSE state tree into a simplified graph.
 4. **VM ISA IR** - `vmspec/ir_lowering.py` converts analysis ASTs into typed expressions and ordered instruction blocks in `vmspec/ir.py`.
 5. **SLEIGH generation** - `vmspec/sleigh_gen.py` consumes only the IR. Frontends may provide an opcode-encoding callback; the core assumes clear opcode bytes by default.
@@ -30,7 +30,7 @@ An external VM challenge for future frontend work is indexed in the
   merging; stores are retained conservatively.
 - **SLEIGH**: supported ASTs and internal branches are emitted; unsupported
   semantics fail explicitly instead of becoming zero.
-- **Operand inference**: one contiguous VPC-relative operand is supported; multi-read layouts and native context bindings remain pending.
+- **Operand inference**: multiple contiguous VPC-relative reads of 1, 2, or 4 bytes are supported when their values reach an effect or branch; ambiguous and non-contiguous layouts remain pending.
 - **Tests**: `python -m unittest discover -s tests -v`, including optional
   Ghidra compilation and a native-vs-P-Code branch regression.
 

@@ -6,7 +6,7 @@ their ordered operations and guarded successor edges agree.
 """
 from __future__ import annotations
 
-from .model import Call, GraphNode, MemAccess, StateNode
+from .model import Call, GraphNode, MemAccess, RegisterAccess, StateNode
 
 
 def _key(value):
@@ -63,6 +63,10 @@ def build_state_graph(root: StateNode) -> GraphNode:
         for call in node.calls:
             live.update(_references(call.target))
         kept = []
+        kept_registers = []
+        for op in reversed(node.register_ops):
+            live.update(_references(op.value))
+            kept_registers.append(op)
         for op in reversed(node.mem_ops):
             if op.kind == "read":
                 if op.forwarded or _key(op.value) not in live:
@@ -75,11 +79,13 @@ def build_state_graph(root: StateNode) -> GraphNode:
         # Incoming conditions execute before this node's effects.
         live.update(_references(node.cond))
         uses[id(node)] = live
-        ops = list(reversed(kept)) + list(node.calls)
+        ops = list(reversed(kept)) + list(reversed(kept_registers)) + list(node.calls)
         edges = [(child.cond, graphs[id(child)].id) for child in node.successors]
         signatures = tuple(
             ("mem", op.kind, op.size, op.endness, _key(op.addr), _key(op.value))
-            if isinstance(op, MemAccess) else ("call", op.site, _key(op.target))
+            if isinstance(op, MemAccess) else
+            ("register", op.register, op.size, _key(op.value)) if isinstance(op, RegisterAccess) else
+            ("call", op.site, _key(op.target))
             for op in ops
         )
         key = (node.addr, signatures, tuple((_key(cond), nid) for cond, nid in edges))

@@ -100,8 +100,10 @@ The existing compiled-P-Code branch comparison remains a regression test.
 
 The current encoding model represents an eight-bit opcode, and SLEIGH still
 targets 32-bit little-endian memory and the existing register layout. Operand
-recovery covers one contiguous VPC-relative read; native register effects and
-specialization remain separate work.
+recovery covers multiple contiguous VPC-relative reads whose values reach an
+effect or branch. Tracked 32-bit register writes are represented in blocks;
+native register binding and complete context specialization remain separate
+work.
 
 Tests verify JSON-compatible IR without analysis objects, deterministic
 temporary names, effect order, frontend encoding callbacks, typing and dominance.

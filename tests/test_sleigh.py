@@ -8,7 +8,7 @@ import claripy
 from tools.compile_spec import compile_slaspec, find_sleigh
 from vmspec.dse import analyze_handler
 from vmspec.model import GraphNode, Handler, MemAccess, VMState
-from vmspec.ir import Expr
+from vmspec.ir import Block, Encoding, Expr, Instruction, ISA, Operand, RegisterWrite, Write
 from vmspec.ir_lowering import lower_expression, lower_isa
 from vmspec.sleigh_gen import _Render, generate_sleigh
 from vmspec.state_graph import build_state_graph
@@ -87,6 +87,7 @@ class SleighTests(unittest.TestCase):
         self.assertIn("goto <handler_end>;", spec)
         self.assertIn("*:4 edi = 0x1:4;", spec)
         self.assertIn("*:4 edi = 0x2:4;", spec)
+        self.assertNotIn(":branch is byte = 0x01; op4", spec)
         self.assertEqual(spec.count("= *:4 esi;"), 1)
 
     def test_unbound_inputs_are_rejected(self):
@@ -118,6 +119,43 @@ class SleighTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "branch.slaspec"
             path.write_text(branch_spec(), encoding="utf-8")
+            result = compile_slaspec(path, compiler)
+            self.assertTrue(result.ok, result.output)
+
+    def test_register_write_compiles_with_ghidra(self):
+        try:
+            compiler = find_sleigh()
+        except FileNotFoundError as exc:
+            self.skipTest(str(exc))
+        instruction = Instruction(
+            1, Encoding(Expr("const", 8, value=1), 1), 0,
+            (Block(0, (RegisterWrite("VSP", Expr("const", 32, value=4)),)),),
+            operands=(),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "register_write.slaspec"
+            path.write_text(generate_sleigh(ISA("VPC", "VSP", (instruction,))), encoding="utf-8")
+            result = compile_slaspec(path, compiler)
+            self.assertTrue(result.ok, result.output)
+
+    def test_multiple_inline_operands_compile_with_ghidra(self):
+        try:
+            compiler = find_sleigh()
+        except FileNotFoundError as exc:
+            self.skipTest(str(exc))
+        first = Expr("operand", 8, value="op1")
+        second = Expr("operand", 8, value="op1_2")
+        instruction = Instruction(
+            1, Encoding(Expr("const", 8, value=1), 3), 0,
+            (Block(0, (
+                Write(Expr("const", 32, value=0x1000), first, 1),
+                Write(Expr("const", 32, value=0x1001), second, 1),
+            )),),
+            operands=(Operand("op1", 1, 1, first), Operand("op1_2", 2, 1, second)),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "multiple_operands.slaspec"
+            path.write_text(generate_sleigh(ISA("VPC", None, (instruction,))), encoding="utf-8")
             result = compile_slaspec(path, compiler)
             self.assertTrue(result.ok, result.output)
 

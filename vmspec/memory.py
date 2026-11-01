@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import angr
 import claripy
 
-from .model import Call, MemAccess, RegionKind, VMState
+from .model import Call, MemAccess, RegisterAccess, RegionKind, VMState
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class Recorder(angr.SimStatePlugin):
         self.read_only_ranges = tuple(read_only_ranges)
         self.mem_ops: list[MemAccess] = []
         self.calls: list[Call] = []
+        self.register_ops: list[RegisterAccess] = []
         self.recent_writes: list[_Write] = []
 
     @angr.SimStatePlugin.memo
@@ -41,6 +42,7 @@ class Recorder(angr.SimStatePlugin):
         c = Recorder(self.regions, self.read_only_ranges)
         c.mem_ops = list(self.mem_ops)
         c.calls = list(self.calls)
+        c.register_ops = list(self.register_ops)
         c.recent_writes = list(self.recent_writes)
         return c
 
@@ -53,8 +55,12 @@ class Recorder(angr.SimStatePlugin):
     def record(self, op):
         if isinstance(op, MemAccess):
             self.mem_ops.append(op)
-        else:
+        elif isinstance(op, Call):
             self.calls.append(op)
+        elif isinstance(op, RegisterAccess):
+            self.register_ops.append(op)
+        else:
+            raise TypeError(f"unsupported recorded operation: {op!r}")
         self.state.history.add_event("vmspec", operation=op)
 
     def _inside(self, addr, size, base, length):
@@ -145,6 +151,14 @@ def install(state, read_only_ranges=(), *, vm_state: VMState | None = None) -> R
     state.register_plugin(rec.NAME, rec)
     # The recorder handles symbolic writes; angr must not pick their addresses.
     state.options.add(angr.options.AVOID_MULTIVALUED_WRITES)
+    tracked = {}
+    if vm_state is not None:
+        for name in (vm_state.vpc, vm_state.vsp, *vm_state.context):
+            if name in state.arch.registers:
+                offset, size = state.arch.registers[name]
+                if size != 4:
+                    raise ValueError(f"VM register {name} must be 32 bits")
+                tracked[name] = (offset, size)
 
     def before_read(s):
         size = _length(s, s.inspect.mem_read_length)
@@ -176,6 +190,26 @@ def install(state, read_only_ranges=(), *, vm_state: VMState | None = None) -> R
         r.store(addr, value, size, s.inspect.mem_write_endness or s.memory.endness)
         r.record(MemAccess("write", addr, value, size, endness=s.inspect.mem_write_endness or s.memory.endness))
 
+    def after_register_write(s):
+        offset = s.inspect.reg_write_offset
+        value = s.inspect.reg_write_expr
+        length = s.inspect.reg_write_length
+        if isinstance(offset, claripy.ast.BV):
+            if not offset.concrete:
+                return
+            offset = offset.concrete_value
+        if not isinstance(offset, int):
+            return
+        if not isinstance(length, int):
+            if value is None:
+                return
+            length = value.size() // 8
+        for name, (base, size) in tracked.items():
+            if offset < base + size and base < offset + length:
+                s.vmspec_recorder.record(RegisterAccess(name, getattr(s.regs, name), size))
+
     state.inspect.b("mem_read", when=angr.BP_BEFORE, action=before_read)
     state.inspect.b("mem_write", when=angr.BP_BEFORE, action=before_write)
+    if tracked:
+        state.inspect.b("reg_write", when=angr.BP_AFTER, action=after_register_write)
     return rec

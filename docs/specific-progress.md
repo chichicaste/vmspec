@@ -53,14 +53,16 @@ validator or the paper's benchmark.
 
 ## Remaining work
 
-1. Recover native-to-VM register bindings and lower register updates, VPC
-   transfers, calls and native transitions. The current DSE rejects calls,
-   incomplete paths and changes to tracked VM registers.
-2. Generalize operand inference beyond one contiguous VPC-relative read and
-   bind native context inputs. The current IR/SLEIGH path supports one inline
-   operand of 1, 2, or 4 bytes.
-3. Implement context concretization/specialization with explicit permitted
-   context, rather than arbitrary state concretization.
+1. Recover native-to-VM register bindings and model native transitions.
+   Tracked 32-bit register writes are now lowered; direct in-binary calls are
+   inlined only when their target and configured context are concrete. External
+   or symbolic calls still fail explicitly.
+2. Extend operand inference beyond contiguous VPC-relative reads of 1, 2, or 4
+   bytes. Gaps, overlapping reads, and full multi-source taint recovery remain
+   unsupported.
+3. Extend context specialization beyond solver-unique values. When active
+   states exceed 100, unique configured context values are concretized with an
+   explicit path guard; ambiguous values remain symbolic.
 4. Keep DBIN-specific handlers, operand formulas, the reference VM, and the
    clear-image workflow in private vmspec-tests; replace their manual
    knowledge with inferred semantics in the generic pipeline.

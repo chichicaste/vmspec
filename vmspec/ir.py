@@ -135,6 +135,17 @@ class Write:
         _memory_types(self.address, self.value, self.size, self.endian)
 
 
+@dataclass(frozen=True)
+class RegisterWrite:
+    register: str
+    value: Expr
+
+    def __post_init__(self):
+        Expr("register", 32, value=self.register)
+        if not isinstance(self.value, Expr) or self.value.is_bool or self.value.bits != 32:
+            raise ValueError("register writes currently require 32-bit values")
+
+
 def _memory_types(address, value, size, endian):
     if not isinstance(address, Expr) or not isinstance(value, Expr):
         raise TypeError("memory effects require IR expressions")
@@ -183,7 +194,7 @@ class ContextUpdate:
 @dataclass(frozen=True)
 class Block:
     id: int
-    operations: tuple[Read | Write | Call, ...] = ()
+    operations: tuple[Read | Write | RegisterWrite | Call, ...] = ()
     branches: tuple[Branch, ...] = ()
     source_address: int | None = None
 
@@ -192,7 +203,7 @@ class Block:
             raise TypeError("block id must be an integer")
         if self.source_address is not None and type(self.source_address) is not int:
             raise TypeError("block source address must be an integer")
-        if not isinstance(self.operations, tuple) or any(not isinstance(o, (Read, Write, Call)) for o in self.operations):
+        if not isinstance(self.operations, tuple) or any(not isinstance(o, (Read, Write, RegisterWrite, Call)) for o in self.operations):
             raise TypeError("block operations must be IR effects")
         if not isinstance(self.branches, tuple) or any(not isinstance(b, Branch) for b in self.branches):
             raise TypeError("block branches must be IR branches")
@@ -272,7 +283,8 @@ class Instruction:
             uses = []
             for index, op in enumerate(block.operations):
                 expressions = ((op.address,) if isinstance(op, Read) else
-                               (op.address, op.value) if isinstance(op, Write) else (op.target,))
+                               (op.address, op.value) if isinstance(op, Write) else
+                               (op.value,) if isinstance(op, RegisterWrite) else (op.target,))
                 uses.extend((index, e) for e in expressions)
             uses.extend((len(block.operations), e.condition) for e in block.branches if e.condition is not None)
             for index, expression in uses:
@@ -301,6 +313,10 @@ class Instruction:
         return tuple(o for b in self.blocks for o in b.operations if isinstance(o, Call))
 
     @property
+    def register_writes(self):
+        return tuple(o for b in self.blocks for o in b.operations if isinstance(o, RegisterWrite))
+
+    @property
     def branches(self):
         return tuple(edge for block in self.blocks for edge in block.branches)
 
@@ -313,6 +329,8 @@ class Instruction:
                     roots.extend((op.address, op.result))
                 elif isinstance(op, Write):
                     roots.extend((op.address, op.value))
+                elif isinstance(op, RegisterWrite):
+                    roots.append(op.value)
                 else:
                     roots.append(op.target)
             roots.extend(b.condition for b in block.branches if b.condition is not None)
@@ -335,11 +353,29 @@ class ISA:
     vpc: str
     vsp: str | None
     instructions: tuple[Instruction, ...]
+    registers: tuple[str, ...] = ()
 
     def __post_init__(self):
         Expr("register", 32, value=self.vpc)
         if self.vsp is not None:
             Expr("register", 32, value=self.vsp)
+        if not isinstance(self.registers, tuple):
+            raise TypeError("ISA registers must be a tuple")
+        if len(set(self.registers)) != len(self.registers):
+            raise ValueError("duplicate ISA register")
+        declared = {self.vpc, *self.registers}
+        if self.vsp is not None:
+            declared.add(self.vsp)
+        for register in self.registers:
+            Expr("register", 32, value=register)
+        if any(
+            op.register not in declared
+            for instruction in self.instructions
+            for block in instruction.blocks
+            for op in block.operations
+            if isinstance(op, RegisterWrite)
+        ):
+            raise ValueError("register write target is not declared in the ISA")
         if not isinstance(self.instructions, tuple) or any(not isinstance(i, Instruction) for i in self.instructions):
             raise TypeError("ISA requires an instruction tuple")
         if len({i.opcode for i in self.instructions}) != len(self.instructions):

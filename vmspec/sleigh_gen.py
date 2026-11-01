@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .ir import ISA, Block, Call, Expr, Instruction, Read, Write
+from .ir import ISA, Block, Call, Expr, Instruction, Read, RegisterWrite, Write
 from .model import VMState
 
 __all__ = ["emit_header", "generate_sleigh", "label"]
@@ -122,6 +122,13 @@ def _node_label(node_id: int) -> str:
     return f"node_{node_id}"
 
 
+def _operand_field(index: int, size: int) -> str:
+    field = {1: "op1", 2: "op2", 4: "op4"}.get(size)
+    if field is None:
+        raise ValueError("SLEIGH supports 1-, 2-, and 4-byte operands")
+    return field if index == 0 else f"{field}_{index + 1}"
+
+
 def _body_nodes(instruction: Instruction):
     registry = {block.id: block for block in instruction.blocks}
     result, seen, pending = [], set(), [instruction.entry]
@@ -152,6 +159,10 @@ def _emit_ops(node: Block, r: _Render, out: list[str]) -> None:
             if op.target.bits != 32:
                 raise ValueError("SLEIGH call targets currently require 32 bits")
             line = f"call [{r.render(op.target)}];"
+        elif isinstance(op, RegisterWrite):
+            if op.register not in r.reg_names:
+                raise ValueError(f"undeclared register write target: {op.register}")
+            line = f"{op.register} = {r.render(op.value)};"
         else:
             raise TypeError("SLEIGH requires IR effects")
         out.extend(r.prelude)
@@ -232,6 +243,17 @@ def emit_header(lines: list[str], vm_state: VMState | ISA, *, with_context: bool
     lines.append("define token data32(32)")
     lines.append("  op4=(0,31)")
     lines.append(";")
+    if isinstance(vm_state, ISA):
+        extra_tokens = sorted({
+            (index, operand.size)
+            for instruction in vm_state.instructions
+            for index, operand in enumerate(instruction.operands or ())
+            if index > 0
+        })
+        for index, size in extra_tokens:
+            field = _operand_field(index, size)
+            lines.extend((f"define token data{size * 8}_{index + 1}({size * 8})",
+                          f"  {field}=(0,{size * 8 - 1})", ";"))
     lines.append("")
 
     # VM registers (abstract state): the virtual program counter and stack
@@ -240,6 +262,8 @@ def emit_header(lines: list[str], vm_state: VMState | ISA, *, with_context: bool
     vm_regs = [vm_state.vpc]
     if vm_state.vsp is not None:
         vm_regs.append(vm_state.vsp)
+    vm_regs.extend(getattr(vm_state, "registers", ()))
+    vm_regs = list(dict.fromkeys(vm_regs))
     lines.append(f"define register offset=0x0 size=4 [ {' '.join(vm_regs)} ];")
     if with_context:
         lines.append(f"define register offset=0x2000 size=4 {_CONTEXT_REG_NAME};")
@@ -269,7 +293,7 @@ def generate_sleigh(isa: ISA) -> str:
     if not isinstance(isa, ISA):
         raise TypeError("generate_sleigh requires VM ISA IR")
     with_context = any(i.context_updates or any(e.op == "context" for e in i.expressions) for i in isa.instructions)
-    names = frozenset(n for n in (isa.vpc, isa.vsp) if n is not None)
+    names = frozenset(n for n in (isa.vpc, isa.vsp, *isa.registers) if n is not None)
     lines = [
         "# VMSpec processor specification (.slaspec)",
         "# Pipeline: DSE -> state graph -> VM ISA IR -> SLEIGH",
@@ -278,19 +302,24 @@ def generate_sleigh(isa: ISA) -> str:
     emit_header(lines, isa, with_context=with_context)
     used_labels = set()
     for instruction in isa.instructions:
-        if instruction.operands is None:
+        if instruction.operands is None or not instruction.operands:
             if instruction.encoding.length not in (None, 1):
                 raise ValueError("instruction length has no corresponding operand encoding")
             suffix = ""
         else:
-            if len(instruction.operands) != 1:
-                raise ValueError("SLEIGH backend supports one inline operand")
-            operand = instruction.operands[0]
-            if operand.name != {1: "op1", 2: "op2", 4: "op4"}.get(operand.size):
-                raise ValueError("operand encoding field does not match its width")
-            if operand.offset != 1 or instruction.encoding.length != 1 + operand.size:
-                raise ValueError("operand layout is not a contiguous field after the opcode")
-            suffix = f"; {operand.name}"
+            cursor = 1
+            fields = []
+            for index, operand in enumerate(instruction.operands):
+                field = _operand_field(index, operand.size)
+                if operand.name != field:
+                    raise ValueError("operand encoding field does not match its width and position")
+                if operand.offset != cursor:
+                    raise ValueError("operand layout is not contiguous after the opcode")
+                fields.append(field)
+                cursor += operand.size
+            if instruction.encoding.length != cursor:
+                raise ValueError("instruction length does not match its operand fields")
+            suffix = "".join(f"; {field}" for field in fields)
         base = label(instruction.mnemonic) if instruction.mnemonic else f"op_{instruction.opcode:02X}"
         name, k = base, 1
         while name in used_labels:

@@ -48,7 +48,7 @@ class IRTests(unittest.TestCase):
         vpc = claripy.BVS("VPC", 32, explicit_name=True)
         raw = claripy.BVS("raw_operand", 8, explicit_name=True)
         graph = GraphNode(0, 0x4000, [
-            MemAccess("read", vpc, raw, 1),
+            MemAccess("read", vpc + 1, raw, 1),
             MemAccess("write", 0x2000, raw ^ 0x55, 1),
         ])
         instruction = lower_handler(Handler(7, 0x4000, 0x4010, "push_u8"), graph, VMState("VPC"))
@@ -59,6 +59,42 @@ class IRTests(unittest.TestCase):
         spec = generate_sleigh(ir.ISA("VPC", None, (instruction,)))
         self.assertIn(":push_u8 is byte = 0x07; op1 {", spec)
         self.assertIn("op1 ^ 0x55:1", spec)
+
+    def test_multiple_contiguous_vpc_reads_become_ordered_operands(self):
+        vpc = claripy.BVS("VPC", 32, explicit_name=True)
+        raw_a = claripy.BVS("raw_a", 8, explicit_name=True)
+        raw_b = claripy.BVS("raw_b", 8, explicit_name=True)
+        graph = GraphNode(0, 0x4000, [
+            MemAccess("read", vpc + 1, raw_a, 1),
+            MemAccess("read", vpc + 2, raw_b, 1),
+            MemAccess("write", 0x2000, raw_a ^ 0x55, 1),
+            MemAccess("write", 0x2001, raw_b + raw_a, 1),
+        ])
+        instruction = lower_handler(Handler(8, 0x4000, 0x4010, "two_u8"), graph, VMState("VPC"))
+        self.assertEqual(
+            [(o.name, o.offset, o.size) for o in instruction.operands],
+            [("op1", 1, 1), ("op1_2", 2, 1)],
+        )
+        self.assertEqual(instruction.encoding.length, 3)
+        spec = generate_sleigh(ir.ISA("VPC", None, (instruction,)))
+        self.assertIn(":two_u8 is byte = 0x08; op1; op1_2 {", spec)
+        self.assertIn("define token data8_2(8)", spec)
+
+    def test_vpc_operand_used_by_control_flow_is_inferred(self):
+        vpc = claripy.BVS("VPC", 32, explicit_name=True)
+        raw = claripy.BVS("branch_operand", 8, explicit_name=True)
+        graph = GraphNode(0, 0x4000, [MemAccess("read", vpc + 1, raw, 1)], [
+            (raw == 0, 1), (raw != 0, 2),
+        ])
+        graph._nodes = {
+            0: graph,
+            1: GraphNode(1, 0x4001),
+            2: GraphNode(2, 0x4002),
+        }
+        instruction = lower_handler(Handler(9, 0x4000, 0x4010, "branch_u8"), graph, VMState("VPC"))
+        self.assertEqual((instruction.operands[0].name, instruction.encoding.length), ("op1", 2))
+        spec = generate_sleigh(ir.ISA("VPC", None, (instruction,)))
+        self.assertIn("if ((op1 == 0x0:1))", spec)
 
     def test_ir_is_json_serializable_and_deterministic(self):
         handler = Handler(3, 0x4000, 0x4010)

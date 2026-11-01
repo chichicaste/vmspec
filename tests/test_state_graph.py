@@ -3,8 +3,10 @@ import unittest
 import angr
 import claripy
 
-from vmspec.dse import analyze_handler
+from vmspec.dse import _build_tree, _concretize_unique_context, analyze_handler
 from vmspec.model import Handler, MemAccess, StateNode, VMState
+from vmspec.ir_lowering import lower_isa
+from vmspec.sleigh_gen import generate_sleigh
 from vmspec.state_graph import build_state_graph
 
 
@@ -49,6 +51,23 @@ class GraphTests(unittest.TestCase):
 
 
 class DSETests(unittest.TestCase):
+    def test_unique_context_value_is_specialized_with_a_guard(self):
+        project = angr.load_shellcode(b"\x90", arch="x86", load_address=0x4000)
+        state = project.factory.blank_state(addr=0x4000)
+        state.regs.esi = claripy.BVS("esi", 32, explicit_name=True)
+        state.add_constraints(state.regs.esi == 0x1234)
+
+        self.assertEqual(_concretize_unique_context([state], ["esi"]), 1)
+        self.assertTrue(state.regs.esi.concrete)
+        tree = _build_tree([state], entry=0x4000)
+        self.assertEqual(len(tree.successors), 1)
+        self.assertTrue(tree.successors[0].cond.symbolic)
+        handler = Handler(1, 0x4000, 0x4001, "context")
+        isa = lower_isa([(handler, build_state_graph(tree))], VMState("eip", context=["esi"]))
+        spec = generate_sleigh(isa)
+        self.assertIn("define register offset=0x0 size=4 [ eip esi ];", spec)
+        self.assertIn("(esi == 0x1234:4)", spec)
+
     def test_branch_load_is_before_guard_and_stores_are_path_local(self):
         # mov eax,[esi]; test eax,eax; jz true; mov [edi],1; jmp end;
         # true: mov [edi],2; end: nop
@@ -76,10 +95,25 @@ class DSETests(unittest.TestCase):
         graph = build_state_graph(tree)
         self.assertEqual(sum(op.kind == "read" for n in graph._nodes.values() for op in n.ops), 1)
 
-    def test_unlowered_register_update_is_rejected(self):
+    def test_register_update_is_recorded_and_lowered(self):
         project = angr.load_shellcode(bytes.fromhex("4690"), arch="x86", load_address=0x4000)
-        with self.assertRaisesRegex(NotImplementedError, "register update"):
-            analyze_handler(project, Handler(1, 0x4000, 0x4001), VMState("esi"), max_steps=2)
+        handler = Handler(1, 0x4000, 0x4001, "inc")
+        graph = build_state_graph(analyze_handler(project, handler, VMState("esi"), max_steps=2))
+        isa = lower_isa([(handler, graph)], VMState("esi"))
+        self.assertEqual(isa.instructions[0].register_writes[0].register, "esi")
+        self.assertIn("define register offset=0x0 size=4 [ esi ];", generate_sleigh(isa))
+        self.assertIn("esi = (0x1:4 + esi);", generate_sleigh(isa))
+
+    def test_in_binary_native_call_is_specialized_inline(self):
+        # call 0x4007; nop; nop; 0x4007: inc esi; ret
+        code = bytes.fromhex("e802000000909046c3")
+        project = angr.load_shellcode(code, arch="x86", load_address=0x4000)
+        handler = Handler(1, 0x4000, 0x4006, "native")
+        tree = analyze_handler(project, handler, VMState("esi"), max_steps=8)
+        graph = build_state_graph(tree)
+        isa = lower_isa([(handler, graph)], VMState("esi"))
+        self.assertEqual(len(isa.instructions[0].calls), 0)
+        self.assertEqual(isa.instructions[0].register_writes[0].register, "esi")
 
     def test_truncated_handler_is_rejected(self):
         project = angr.load_shellcode(bytes.fromhex("ebfe"), arch="x86", load_address=0x4000)

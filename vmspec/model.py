@@ -19,6 +19,8 @@ __all__ = [
     "Handler",
     "MemAccess",
     "Call",
+    "RegisterAccess",
+    "ContextAssumption",
     "StateNode",
     "GraphNode",
 ]
@@ -123,6 +125,26 @@ class Call:
 
 
 @dataclass
+class RegisterAccess:
+    """A write to a tracked 32-bit VM register during DSE."""
+
+    register: str
+    value: object
+    size: int = 4
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.register, str) or not self.register or self.size <= 0:
+            raise ValueError("invalid register access")
+
+
+@dataclass
+class ContextAssumption:
+    """A path guard introduced when DSE proves one context value is unique."""
+
+    condition: object
+
+
+@dataclass
 class StateNode:
     """A node in the per-handler DSE state tree.
 
@@ -138,6 +160,7 @@ class StateNode:
     calls: list[Call] = field(default_factory=list)
     successors: list["StateNode"] = field(default_factory=list)
     cond: object | None = None
+    register_ops: list[RegisterAccess] = field(default_factory=list)
 
 
 @dataclass
