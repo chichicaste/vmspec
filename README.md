@@ -1,20 +1,18 @@
 # VMSpec — VM deobfuscation via automated SLEIGH spec generation
 
-An independent experimental implementation of the **VMSpec** architecture
-([arXiv:2610.29566](https://arxiv.org/abs/2610.29566), Fabian Kilger,
-Leonard Auer and Manuel Andreas). The sample workflow targets a
-Code Virtualizer-derived VM. Core DSE, state-graph and SLEIGH generation are
-implemented; automatic semantic/operand recovery and full C decompilation
-remain under development.
+Independent experimental implementation of the VMSpec architecture, currently validated against a Code Virtualizer-derived VM. Core DSE, state-graph and SLEIGH generation are implemented; automatic semantic/operand recovery and full decompilation are under development.
 
 The sample input is a raw VM blob containing native handlers, a dispatch
 table and encrypted bytecode. Its existing clear-image workflow still uses
 sample-specific decoding, manual semantics and a reference interpreter.
 
 The `specific` branch adds segmented memory, incremental event attribution,
-guard-aware graphs, a [VM ISA IR](docs/isa-ir.md) and SLEIGH local branches. See
-[implementation progress and limits](docs/specific-progress.md) for completed
-checks and the remaining audit items.
+guard-aware graphs and a [VM ISA IR](docs/isa-ir.md). See the [target
+architecture](docs/architecture.md) for the stage-by-stage status and the
+[next step](docs/specific-progress.md).
+
+An external VM challenge for future frontend work is indexed in the
+[benchmark references](docs/benchmark-references.md).
 
 ## Pipeline
 

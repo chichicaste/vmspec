@@ -37,6 +37,22 @@ class IRTests(unittest.TestCase):
         self.assertIsNone(instruction.stack_effect)
         self.assertIsNone(instruction.encoding.length)
 
+    def test_vpc_relative_operand_is_inferred_into_ir_and_sleigh(self):
+        vpc = claripy.BVS("VPC", 32, explicit_name=True)
+        raw = claripy.BVS("raw_operand", 8, explicit_name=True)
+        graph = GraphNode(0, 0x4000, [
+            MemAccess("read", vpc, raw, 1),
+            MemAccess("write", 0x2000, raw ^ 0x55, 1),
+        ])
+        instruction = lower_handler(Handler(7, 0x4000, 0x4010, "push_u8"), graph, VMState("VPC"))
+        self.assertEqual(instruction.encoding.length, 2)
+        self.assertEqual((instruction.operands[0].offset, instruction.operands[0].size), (1, 1))
+        self.assertEqual(instruction.operands[0].value.op, "xor")
+        self.assertEqual(len(instruction.reads), 0)
+        spec = generate_sleigh(ir.ISA("VPC", None, (instruction,)))
+        self.assertIn(":push_u8 is byte = 0x07; op1 {", spec)
+        self.assertIn("op1 ^ 0x55:1", spec)
+
     def test_ir_is_json_serializable_and_deterministic(self):
         handler = Handler(3, 0x4000, 0x4010)
         first = lower_handler(handler, self.graph(), VMState("VPC"))

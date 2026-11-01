@@ -95,6 +95,7 @@ data/_min.*
 data/context.txt
 data/_fieldgate.*
 data/_fg_min.*
+data/external/antislopctf-2026/
 
 # ===== Test / PoC artifacts (moved to the private vmspec-tests repo) =====
 docs/Test_Concept/

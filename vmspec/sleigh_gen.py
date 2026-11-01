@@ -26,6 +26,7 @@ class _Render:
 
     reg_names: frozenset[str] = frozenset()
     temporaries: frozenset[str] = frozenset()
+    operands: frozenset[str] = frozenset()
     _tmp: int = 1
     prelude: list[str] = field(default_factory=list)
     bindings: dict[str, str] = field(default_factory=dict)
@@ -34,7 +35,7 @@ class _Render:
         while True:
             name = f"tmp{self._tmp}"
             self._tmp += 1
-            if name not in self.reg_names | self.temporaries:
+            if name not in self.reg_names | self.temporaries | self.operands:
                 return name
 
     def temporary(self, expression, size):
@@ -62,6 +63,10 @@ class _Render:
                 if expr.value not in self.bindings:
                     self.bindings[expr.value] = self.fresh_tmp()
                 return self.bindings[expr.value]
+            return expr.value
+        if op == "operand":
+            if expr.value not in self.operands:
+                raise ValueError(f"unbound IR operand: {expr.value}")
             return expr.value
         if op in _BIN_OPS:
             return "(" + f" {_BIN_OPS[op]} ".join(self.render(a) for a in args) + ")"
@@ -258,9 +263,8 @@ def _pattern(expr: Expr) -> str:
 def generate_sleigh(isa: ISA) -> str:
     """Generate SLEIGH from VM ISA IR only.
 
-    The backend currently emits opcode-only instructions. Known operand
-    encodings outside that subset fail explicitly; unknown encodings remain
-    marked as such in the specification.
+    Inline operands use the token field recovered into the IR. Unknown
+    encodings remain marked as unresolved in the specification.
     """
     if not isinstance(isa, ISA):
         raise TypeError("generate_sleigh requires VM ISA IR")
@@ -274,8 +278,19 @@ def generate_sleigh(isa: ISA) -> str:
     emit_header(lines, isa, with_context=with_context)
     used_labels = set()
     for instruction in isa.instructions:
-        if instruction.operands or instruction.encoding.length not in (None, 1):
-            raise ValueError("operand encoding lowering is not implemented")
+        if instruction.operands is None:
+            if instruction.encoding.length not in (None, 1):
+                raise ValueError("instruction length has no corresponding operand encoding")
+            suffix = ""
+        else:
+            if len(instruction.operands) != 1:
+                raise ValueError("SLEIGH backend supports one inline operand")
+            operand = instruction.operands[0]
+            if operand.name != {1: "op1", 2: "op2", 4: "op4"}.get(operand.size):
+                raise ValueError("operand encoding field does not match its width")
+            if operand.offset != 1 or instruction.encoding.length != 1 + operand.size:
+                raise ValueError("operand layout is not a contiguous field after the opcode")
+            suffix = f"; {operand.name}"
         base = label(instruction.mnemonic) if instruction.mnemonic else f"op_{instruction.opcode:02X}"
         name, k = base, 1
         while name in used_labels:
@@ -291,8 +306,9 @@ def generate_sleigh(isa: ISA) -> str:
                 raise ValueError("unsupported context field")
             updates.append(f"key = {_pattern(update.value)}; globalset(inst_next, key);")
         action = "[ " + " ".join(updates) + " ] " if updates else ""
-        lines.append(f":{name} is byte = {_pattern(instruction.encoding.opcode)} {action}{{")
-        renderer = _Render(names, frozenset(read.result.value for read in instruction.reads))
+        lines.append(f":{name} is byte = {_pattern(instruction.encoding.opcode)}{suffix} {action}{{")
+        renderer = _Render(names, frozenset(read.result.value for read in instruction.reads),
+                           frozenset(o.name for o in instruction.operands or ()))
         _emit_body(instruction, renderer, lines)
         lines.extend(("}", ""))
     return "\n".join(lines).rstrip() + "\n"

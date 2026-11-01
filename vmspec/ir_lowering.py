@@ -73,6 +73,42 @@ def _nodes(graph: GraphNode):
     return result
 
 
+def _vpc_offset(address, vpc_name):
+    """Return a constant offset for VPC-relative addresses, else None."""
+    if not isinstance(address, claripy.ast.BV):
+        return None
+    if address.op == "BVS":
+        return 0 if address.args[0] == vpc_name else None
+    if address.op in {"__add__", "__sub__"} and len(address.args) == 2:
+        left, right = address.args
+        if right.op == "BVV":
+            base = _vpc_offset(left, vpc_name)
+            if base is not None:
+                delta = right.args[0]
+                return base + (delta if address.op == "__add__" else -delta)
+        if address.op == "__add__" and left.op == "BVV":
+            base = _vpc_offset(right, vpc_name)
+            if base is not None:
+                return base + left.args[0]
+    return None
+
+
+def _operand_reads(nodes, vpc_name):
+    candidates = [(op, _vpc_offset(op.addr, vpc_name)) for node in nodes for op in node.ops
+                  if isinstance(op, MemAccess) and op.kind == "read" and not op.forwarded]
+    candidates = [(op, offset) for op, offset in candidates if offset is not None and offset >= 0]
+    if len(candidates) != 1:
+        return None
+    read, relative = candidates[0]
+    if read.size not in (1, 2, 4) or not isinstance(read.value, claripy.ast.BV) or read.value.op != "BVS":
+        return None
+    variable = read.value.args[0]
+    # shortcut: use the first write consuming this read; add taint-based output selection for multi-use operands.
+    decoded = next((op.value for node in nodes for op in node.ops if isinstance(op, MemAccess)
+                    and op.kind == "write" and variable in getattr(op.value, "variables", ())), None)
+    return None if decoded is None else (read, relative + 1, decoded)
+
+
 def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode="clear", opcode=None):
     """Lower one graph without retaining ASTs or mutating its node ids."""
     if mode not in {"clear", "rolling"}:
@@ -80,6 +116,14 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode
     opcode = handler.opcode if opcode is None else opcode
     nodes = _nodes(graph)
     ids = {node.id: i for i, node in enumerate(nodes)}
+    inferred = _operand_reads(nodes, vm_state.vpc)
+    operands = None
+    operand_symbols = {}
+    if inferred is not None:
+        read, offset, _ = inferred
+        name = {1: "op1", 2: "op2", 4: "op4"}[read.size]
+        operand_symbols[read.value.args[0]] = ir.Expr("operand", read.size * 8, value=name)
+        operands = (ir.Operand(name, offset, read.size, operand_symbols[read.value.args[0]]),)
     symbols = {
         name: ir.Expr("register", 32, value=name)
         for name in (vm_state.vpc, vm_state.vsp) if name is not None
@@ -93,7 +137,7 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode
                 name = op.value.args[0]
                 if name in symbols:
                     raise ValueError("read result has multiple definitions or shadows a register")
-                symbols[name] = ir.Expr("temp", op.size * 8, value=f"read_{count}")
+                symbols[name] = operand_symbols.get(name, ir.Expr("temp", op.size * 8, value=f"read_{count}"))
                 count += 1
     blocks = []
     for node in nodes:
@@ -101,6 +145,8 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode
         for op in node.ops:
             if isinstance(op, MemAccess):
                 if op.kind == "read" and op.forwarded:
+                    continue
+                if inferred is not None and op is inferred[0]:
                     continue
                 if op.endness not in {"Iend_LE", "Iend_BE"}:
                     raise ValueError("unknown memory byte order")
@@ -127,8 +173,16 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, mode
             ir.Expr("const", 8, value=1),
         ))
         updates = (ir.ContextUpdate("key", ir.Expr("sub", 8, (key, ir.Expr("const", 8, value=opcode)))),)
-    return ir.Instruction(opcode, ir.Encoding(raw_opcode), ids[graph.id], tuple(blocks),
-                          handler.mnemonic, context_updates=updates)
+    if inferred is not None:
+        read, offset, decoded = inferred
+        name = operands[0].name
+        decoded_value = lower_expression(decoded, symbols, bits=read.size * 8)
+        operands = (ir.Operand(name, offset, read.size, decoded_value),)
+        length = offset + read.size
+    else:
+        length = None
+    return ir.Instruction(opcode, ir.Encoding(raw_opcode, length), ids[graph.id], tuple(blocks),
+                          handler.mnemonic, operands=operands, context_updates=updates)
 
 
 def lower_isa(built: list[tuple[Handler, GraphNode]], vm_state: VMState, dispatch_table=None, *, mode="clear"):

@@ -3,6 +3,10 @@
 This branch is an incremental implementation of the audit, not a complete
 reproduction of the VMSpec paper.
 
+## Architecture
+
+See [architecture.md](architecture.md) for the target pipeline, current implementation status, boundary contracts, and the next operand-inference step.
+
 ## Implemented and checked
 
 - [VM ISA IR](isa-ir.md) now separates analysis from the SLEIGH backend.
@@ -52,8 +56,9 @@ validator or the paper's benchmark.
 1. Recover native-to-VM register bindings and lower register updates, VPC
    transfers, calls and native transitions. The current DSE rejects calls,
    incomplete paths and changes to tracked VM registers.
-2. Infer operand encodings and decryption expressions into the existing IR.
-   The current core emitter still assumes one opcode byte.
+2. Generalize operand inference beyond one contiguous VPC-relative read and
+   bind native context inputs. The current IR/SLEIGH path supports one inline
+   operand of 1, 2, or 4 bytes.
 3. Implement context concretization/specialization with explicit permitted
    context, rather than arbitrary state concretization.
 4. Replace the sample-specific reference path: semantics.py, operand.py,
