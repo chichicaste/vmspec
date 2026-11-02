@@ -28,14 +28,14 @@ class Expr:
         if not isinstance(self.args, tuple) or any(not isinstance(a, Expr) for a in self.args):
             raise TypeError("IR expression arguments must be Expr tuples")
         op, args = self.op, self.args
-        if op in {"const", "bool", "register", "context", "temp", "operand"}:
+        if op in {"const", "bool", "register", "initial_register", "context", "temp", "operand"}:
             if args:
                 raise ValueError("leaf expression cannot have arguments")
             if op == "const" and (type(self.value) is not int or not 0 <= self.value < 1 << self.bits):
                 raise ValueError("constant does not fit its bit width")
             if op == "bool" and (type(self.value) is not bool or self.bits != 1):
                 raise ValueError("boolean constant requires one bit")
-            if op in {"register", "context", "temp", "operand"} and (
+            if op in {"register", "initial_register", "context", "temp", "operand"} and (
                 not isinstance(self.value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.value)
             ):
                 raise ValueError("invalid IR symbol name")

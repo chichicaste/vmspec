@@ -29,6 +29,7 @@ flowchart TD
 | State graph | `vmspec/state_graph.py` | Preserves the relative order of surviving memory/register/call effects, removes unused reads, and merges nodes using explicit branch guards. Specialization assumptions remain metadata and do not create control-flow edges. Stores are retained where alias safety is unknown. |
 | Operand inference | `vmspec/ir_lowering.py` | Handles multiple contiguous VPC-relative reads of 1, 2, or 4 bytes when each reaches an effect or branch. It records decoder expressions and instruction length in IR. Gapped, overlapping, and ambiguous layouts remain unsupported. |
 | VM ISA IR | `vmspec/ir.py` | Implemented as immutable, typed, JSON-serializable Python data. It has ordered blocks, typed branch guards, separate context-assumption metadata, memory reads/writes, calls, context updates and expression trees. |
+| IR execution | `vmspec/ir_eval.py` | Concrete, VM-independent execution for differential tests. Distinguishes entry-register snapshots from live registers; preserves memory order and validates specialization assumptions without creating branches. Calls and decode-time context updates are explicitly unsupported. |
 | SLEIGH backend | `vmspec/sleigh_gen.py` | Consumes only the IR. Emits the supported expression, branch, register-write, and contiguous operand subset; requires 8-bit opcodes, 32-bit addresses/registers, and little-endian effects. Other operand layouts raise an error. |
 | Clear-bytecode backend | Not in the public core | The DBIN-specific clear-image path and manual semantics are in private `vmspec-tests`; no IR-based clear-bytecode backend exists yet. |
 | Ghidra, CFG, P-Code, C | SLEIGH backend; private test harness | The private suite compares compiled P-Code with native execution for branch choice, memory, and register results. Ghidra headless also validates a 49-instruction/65-byte CFG with no unresolved transfers and minimal C for one Code Virtualizer-derived segment. Other DBIN segments still contain unsupported semantics; general end-to-end decompilation remains incomplete. |
@@ -56,8 +57,10 @@ clear-image workflow and manual VM interpreter are isolated in private
 
 ## Next implementation step
 
-Add a separately validated frontend for a second VM family. Tigress is not
-installed in the current environment; Anti-Slop's Parallax sample is x86-64,
-while the core currently accepts 32-bit little-endian targets. Automatic
-dispatcher/VPC/VSP/handler discovery and complete Ghidra decompilation remain
-pending.
+Complete semantic validation of the generic DSE -> graph -> IR -> SLEIGH
+pipeline before extending VM-specific configurations. The experimental Tigress
+frontend recognizes an interpolation dispatcher in a real x86-64 fixture, but
+its frame-resident VPC/VSP bindings are not connected to the 32-bit core.
+Discovery alone does not demonstrate semantic recovery or C decompilation.
+The existing Ghidra segment regression uses a separately prepared private
+processor; it is not evidence of end-to-end decompilation from inferred IR.

@@ -42,7 +42,7 @@ See [architecture.md](architecture.md) for the target pipeline, current implemen
 
 ## Validation
 
-Run from the private test repository root:
+Run from the public repository root:
 
     .venv\Scripts\python.exe data/external/vmspec-tests/tools/run_core_tests.py
 
@@ -51,6 +51,14 @@ small native x86 handlers, Ghidra SLEIGH compilation, and a pypcode check that
 compares branch choice, memory writes, and register results with native angr
 execution. Its Ghidra headless check requires a reachable 49-instruction CFG
 and minimal C for one Code Virtualizer-derived segment.
+
+The independent IR executor adds a middle comparison point between native
+execution and compiled P-Code. Regressions cover branches and repeated register
+updates followed by memory writes, including 32-bit wraparound. DSE entry
+symbols remain entry snapshots even after a register is written. Arithmetic
+evaluation is also compared against Claripy on boundary inputs. Calls,
+decode-time context updates, and full-program equivalence remain unsupported
+by this executor.
 
 This remains a narrow semantic regression check, not a general equivalence
 validator or the paper's benchmark. The second DBIN segment still decompiles

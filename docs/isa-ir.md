@@ -46,6 +46,20 @@ Signedness is encoded in the operation, not inferred from a variable name.
 Register, temporary, context and operand references occupy distinct IR
 namespaces. Memory effects retain their byte size and byte order.
 
+`initial_register` denotes a register's value on instruction entry, while
+`register` denotes its current value. Lowering preserves DSE input symbols
+with `initial_register` when that register can change. Backends must capture
+these values before executing any effects or taking internal branches;
+reading the updated register would apply arithmetic a second time.
+
+`vmspec.ir_eval.execute()` executes a supported instruction against explicit
+register values and byte-addressed memory, returning copies of both and the
+visited IR blocks. It preserves arithmetic widths, memory byte order and
+entry snapshots. Missing memory, violated specialization assumptions, calls
+without contracts and exhausted execution budgets fail explicitly. This
+executor supports differential tests; it is not a proof of equivalence or
+a full native/P-Code validation harness.
+
 Validation rejects incompatible widths, missing blocks, duplicate temporary
 definitions, uses before a definition and definitions that do not dominate
 all incoming paths. These checks happen before invoking a backend.

@@ -163,8 +163,11 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opco
             )
             for index, (read, offset, _) in enumerate(inferred)
         )
+    modified = {op.register for node in nodes for op in node.ops if isinstance(op, RegisterAccess)}
+    if any(isinstance(op, Call) for node in nodes for op in node.ops):
+        modified.update(name for name in (vm_state.vpc, vm_state.vsp, *vm_state.context) if name)
     symbols = {
-        name: ir.Expr("register", 32, value=name)
+        name: ir.Expr("initial_register" if name in modified else "register", 32, value=name)
         for name in (vm_state.vpc, vm_state.vsp, *vm_state.context) if name is not None
     }
     count = 0

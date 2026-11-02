@@ -30,6 +30,7 @@ class _Render:
     _tmp: int = 1
     prelude: list[str] = field(default_factory=list)
     bindings: dict[str, str] = field(default_factory=dict)
+    initial_registers: dict[str, str] = field(default_factory=dict)
 
     def fresh_tmp(self):
         while True:
@@ -53,6 +54,10 @@ class _Render:
             return f"0x{expr.value:X}:{expr.bits // 8}"
         if op == "bool":
             return "1:1" if expr.value else "0:1"
+        if op == "initial_register":
+            if expr.value not in self.initial_registers or expr.bits != 32:
+                raise ValueError(f"missing or invalid entry register snapshot: {expr.value}")
+            return self.initial_registers[expr.value]
         if op in {"register", "temp"}:
             names = self.reg_names if op == "register" else self.temporaries
             if expr.value not in names:
@@ -191,6 +196,13 @@ def _emit_control(node: Block, r: _Render, out: list[str]) -> None:
 
 
 def _emit_body(instruction: Instruction, r: _Render, lines: list[str]) -> None:
+    # DSE symbols describe entry values even after the corresponding register changes.
+    for expr in instruction.expressions:
+        if expr.op == "initial_register" and expr.value not in r.initial_registers:
+            register = r.render(Expr("register", expr.bits, value=expr.value))
+            r.initial_registers[expr.value] = r.temporary(register, expr.bits // 8)
+    lines.extend(r.prelude)
+    r.prelude.clear()
     body = _body_nodes(instruction)
     targets = {instruction.entry}
     for node in body:

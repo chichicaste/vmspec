@@ -40,6 +40,10 @@ An external VM challenge for future frontend work is indexed in the
   results. A Ghidra headless check also requires a reachable CFG and minimal C
   for one Code Virtualizer-derived segment. Other segments and a second VM are
   not yet validated.
+- **IR execution**: an architecture-independent concrete executor supports
+  differential tests of the recovered IR. Entry-register snapshots preserve
+  DSE expressions across subsequent register writes. Calls and decode-time
+  context updates require further execution support.
 - **Tests**: the regression suite lives in the private companion repository
   `data/external/vmspec-tests`; it is not part of this source repo.
 
