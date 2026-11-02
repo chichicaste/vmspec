@@ -25,13 +25,13 @@ flowchart TD
 | --- | --- | --- |
 | VM detection | `vmspec/config.py` | VM state and dispatcher ranges are supplied by a frontend. Automatic detection is pending; the DBIN-specific frontend lives in private `vmspec-tests`. |
 | Handler discovery | Frontend-provided metadata | Finding a dispatcher/table in an unknown binary is pending. DBIN table extraction is kept in the private test repository. |
-| DSE | `vmspec/dse.py`, `vmspec/memory.py` | Symbolic branches and ordered events use path-local memory. Tracked 32-bit register writes are captured. Finite in-binary call targets (up to eight) are analyzed inline with symbolic context; unbounded/external calls fail. Above 100 active states, context domains of at most four values are split with guards, capped at 16 variants per path. |
-| State graph | `vmspec/state_graph.py` | Preserves memory/register/call effect order, removes unused reads, and merges nodes with their guards. Stores are retained where alias safety is unknown. |
+| DSE | `vmspec/dse.py`, `vmspec/memory.py` | Symbolic branches and ordered events use path-local memory. A single recorder sequence preserves memory/register/call event order. Finite in-binary call targets (up to eight) are analyzed inline with symbolic context; unbounded and external calls fail with an explicit unsupported-case error. Above 100 active states, context domains of at most four values are split, capped at 16 variants per path. |
+| State graph | `vmspec/state_graph.py` | Preserves the relative order of surviving memory/register/call effects, removes unused reads, and merges nodes using explicit branch guards. Specialization assumptions remain metadata and do not create control-flow edges. Stores are retained where alias safety is unknown. |
 | Operand inference | `vmspec/ir_lowering.py` | Handles multiple contiguous VPC-relative reads of 1, 2, or 4 bytes when each reaches an effect or branch. It records decoder expressions and instruction length in IR. Gapped, overlapping, and ambiguous layouts remain unsupported. |
-| VM ISA IR | `vmspec/ir.py` | Implemented as immutable, typed, JSON-serializable Python data. It has ordered blocks, branches, memory reads/writes, calls, context updates and expression trees. |
+| VM ISA IR | `vmspec/ir.py` | Implemented as immutable, typed, JSON-serializable Python data. It has ordered blocks, typed branch guards, separate context-assumption metadata, memory reads/writes, calls, context updates and expression trees. |
 | SLEIGH backend | `vmspec/sleigh_gen.py` | Consumes only the IR. Emits the supported expression, branch, register-write, and contiguous operand subset; requires 8-bit opcodes, 32-bit addresses/registers, and little-endian effects. Other operand layouts raise an error. |
 | Clear-bytecode backend | Not in the public core | The DBIN-specific clear-image path and manual semantics are in private `vmspec-tests`; no IR-based clear-bytecode backend exists yet. |
-| Ghidra, CFG, P-Code, C | SLEIGH backend; private test harness | The private regression suite checks one synthetic branch end to end. Full CFG recovery and useful C decompilation remain incomplete. |
+| Ghidra, CFG, P-Code, C | SLEIGH backend; private test harness | The private suite compares compiled P-Code with native execution for branch choice, memory, and register results. Ghidra headless also validates a 49-instruction/65-byte CFG with no unresolved transfers and minimal C for one Code Virtualizer-derived segment. Other DBIN segments still contain unsupported semantics; general end-to-end decompilation remains incomplete. |
 
 The two output paths currently differ: the core analysis pipeline creates IR
 and feeds frontend-provided opcode encodings to SLEIGH. The DBIN-specific
@@ -56,7 +56,8 @@ clear-image workflow and manual VM interpreter are isolated in private
 
 ## Next implementation step
 
-Apply bounded call-target and context specialization at native transitions,
-recover missing handler semantics, and resolve indirect CFG edges before
-Ghidra decompilation. Anti-Slop's Parallax VM also needs a dedicated frontend
-and 64-bit target support.
+Add a separately validated frontend for a second VM family. Tigress is not
+installed in the current environment; Anti-Slop's Parallax sample is x86-64,
+while the core currently accepts 32-bit little-endian targets. Automatic
+dispatcher/VPC/VSP/handler discovery and complete Ghidra decompilation remain
+pending.

@@ -168,15 +168,35 @@ class Call:
 
 
 @dataclass(frozen=True)
+class BranchGuard:
+    condition: Expr
+
+    def __post_init__(self):
+        if not isinstance(self.condition, Expr) or not self.condition.is_bool:
+            raise ValueError("branch guard must be boolean")
+
+
+@dataclass(frozen=True)
+class ContextAssumption:
+    """Analysis metadata; it must never be emitted as executable control flow."""
+
+    condition: Expr
+
+    def __post_init__(self):
+        if not isinstance(self.condition, Expr) or not self.condition.is_bool:
+            raise ValueError("context assumption must be boolean")
+
+
+@dataclass(frozen=True)
 class Branch:
     target: int
-    condition: Expr | None = None
+    guard: BranchGuard | None = None
 
     def __post_init__(self):
         if type(self.target) is not int:
             raise TypeError("branch target must be a block id")
-        if self.condition is not None and (not isinstance(self.condition, Expr) or not self.condition.is_bool):
-            raise ValueError("branch guard must be boolean")
+        if self.guard is not None and not isinstance(self.guard, BranchGuard):
+            raise TypeError("branch guard must be a BranchGuard")
 
 
 @dataclass(frozen=True)
@@ -197,6 +217,7 @@ class Block:
     operations: tuple[Read | Write | RegisterWrite | Call, ...] = ()
     branches: tuple[Branch, ...] = ()
     source_address: int | None = None
+    assumptions: tuple[ContextAssumption, ...] = ()
 
     def __post_init__(self):
         if type(self.id) is not int:
@@ -207,6 +228,8 @@ class Block:
             raise TypeError("block operations must be IR effects")
         if not isinstance(self.branches, tuple) or any(not isinstance(b, Branch) for b in self.branches):
             raise TypeError("block branches must be IR branches")
+        if not isinstance(self.assumptions, tuple) or any(not isinstance(a, ContextAssumption) for a in self.assumptions):
+            raise TypeError("block assumptions must be IR context assumptions")
 
 
 @dataclass(frozen=True)
@@ -286,7 +309,7 @@ class Instruction:
                                (op.address, op.value) if isinstance(op, Write) else
                                (op.value,) if isinstance(op, RegisterWrite) else (op.target,))
                 uses.extend((index, e) for e in expressions)
-            uses.extend((len(block.operations), e.condition) for e in block.branches if e.condition is not None)
+            uses.extend((len(block.operations), e.guard.condition) for e in block.branches if e.guard is not None)
             for index, expression in uses:
                 pending = [expression]
                 while pending:
@@ -333,7 +356,7 @@ class Instruction:
                     roots.append(op.value)
                 else:
                     roots.append(op.target)
-            roots.extend(b.condition for b in block.branches if b.condition is not None)
+            roots.extend(b.guard.condition for b in block.branches if b.guard is not None)
         roots.extend(o.value for o in self.operands or ())
         roots.extend(c.value for c in self.context_updates)
         if self.stack_effect is not None:

@@ -15,7 +15,7 @@ import angr
 import claripy
 
 from .memory import install
-from .model import Call, ContextAssumption, Handler, RegisterAccess, StateNode, VMState
+from .model import BranchGuard, Call, ContextAssumption, Handler, RegisterAccess, StateNode, VMState
 
 _CONTEXT_STATE_THRESHOLD = 100
 _CONTEXT_VALUE_LIMIT = 4
@@ -25,12 +25,17 @@ _CALL_TARGET_LIMIT = 8
 
 def _internal_call_targets(project, state, target):
     targets = state.solver.eval_upto(target, _CALL_TARGET_LIMIT + 1)
-    if (
-        not targets
-        or len(targets) > _CALL_TARGET_LIMIT
-        or any(project.loader.find_object_containing(addr) is None for addr in targets)
-    ):
-        raise NotImplementedError("unbounded or external calls require specialized semantics")
+    if not targets or len(targets) > _CALL_TARGET_LIMIT:
+        raise NotImplementedError("unbounded symbolic calls require specialized semantics")
+    external = [addr for addr in targets if (
+        project.loader.find_object_containing(addr) is None
+        or project.loader.find_object_containing(addr) is project.loader.extern_object
+    )]
+    if external:
+        raise NotImplementedError(
+            "external call targets require an explicit SimProcedure or call contract: "
+            + ", ".join(f"0x{addr:X}" for addr in external)
+        )
     return targets
 
 
@@ -105,7 +110,8 @@ def analyze_handler(
         )
     for leaf in simgr.found:
         for name, initial in initial_registers.items():
-            recorded = any(op.register == name for op in leaf.vmspec_recorder.register_ops)
+            recorded = any(isinstance(op, RegisterAccess) and op.register == name
+                           for op in leaf.vmspec_recorder.effects)
             if not leaf.solver.is_true(getattr(leaf.regs, name) == initial) and not recorded:
                 raise NotImplementedError(f"VM register update {name} requires register-effect lowering")
     return _build_tree(simgr.found, entry=handler.entry)
@@ -194,15 +200,18 @@ def _build_tree(leaves: list[angr.SimState], *, entry: int) -> StateNode | None:
             for event in h.recent_events:
                 if event.type != "vmspec":
                     continue
+                op = event.objects["operation"]
+                if isinstance(op, ContextAssumption):
+                    key = (id(prev), "assumption", event.id)
+                    if key not in nodes:
+                        prev.assumptions.append(op)
+                        nodes[key] = prev
+                    continue
                 key = (id(prev), "event", event.id)
                 node = nodes.get(key)
                 if node is None:
-                    op = event.objects["operation"]
                     node = StateNode(addr=event.ins_addr or h.addr or entry)
-                    if isinstance(op, ContextAssumption):
-                        node.cond = op.condition
-                    else:
-                        node.effects.append(op)
+                    node.effects.append(op)
                     prev.successors.append(node)
                     nodes[key] = node
                 prev = node
@@ -214,7 +223,7 @@ def _build_tree(leaves: list[angr.SimState], *, entry: int) -> StateNode | None:
             node = nodes.get(key)
             if node is None:
                 addr = target.args[0] if getattr(target, "op", None) == "BVV" else h.addr
-                node = StateNode(addr=addr or entry, cond=guard)
+                node = StateNode(addr=addr or entry, guard=BranchGuard(guard))
                 prev.successors.append(node)
                 nodes[key] = node
             prev = node

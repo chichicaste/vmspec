@@ -20,9 +20,13 @@ See [architecture.md](architecture.md) for the target pipeline, current implemen
 - Symbolic reads and writes do not choose pointer values. Mutable image
   memory is symbolic unless a prior write supplies its value. A readonly
   region may supply an image value only at a uniquely determined address.
-- Ordered memory, register, and call effects live in angr histories and remain
-  in one sequence through the state tree and state graph. The tree shares event
-  prefixes across forks and places outgoing guards after their defining loads.
+- Ordered memory, register, and call effects live in one recorder sequence and
+  remain ordered through the state tree, DCE, state graph, IR, and SLEIGH.
+  Liveness removes unused reads without reordering surviving effects. The tree
+  shares event prefixes across forks and places branch guards after their
+  defining loads.
+- Context-specialization assumptions are separate metadata in the model and
+  IR; they do not become CFG edges or SLEIGH branches.
 - Read liveness traverses symbolic ASTs. Forwarded reads do not redefine
   previous values. Node merging includes edge guards and operation order.
   Stores are retained conservatively pending sound alias-aware dead-store
@@ -38,16 +42,19 @@ See [architecture.md](architecture.md) for the target pipeline, current implemen
 
 ## Validation
 
-Run from the repository root:
+Run from the private test repository root:
 
     .venv\Scripts\python.exe data/external/vmspec-tests/tools/run_core_tests.py
 
-The synthetic regression suite is stored in the private companion test repo.
-It includes small native x86 handlers, Ghidra compilation, and a pypcode check
-that compares compiled branch behavior with native execution in angr.
+The regression suite is stored in the private companion test repo. It includes
+small native x86 handlers, Ghidra SLEIGH compilation, and a pypcode check that
+compares branch choice, memory writes, and register results with native angr
+execution. Its Ghidra headless check requires a reachable 49-instruction CFG
+and minimal C for one Code Virtualizer-derived segment.
 
-This is a narrow semantic regression check, not a general equivalence
-validator or the paper's benchmark.
+This remains a narrow semantic regression check, not a general equivalence
+validator or the paper's benchmark. The second DBIN segment still decompiles
+with an unimplemented-handler warning, and no second VM family is validated.
 
 ## Remaining work
 
@@ -65,8 +72,8 @@ validator or the paper's benchmark.
 4. Keep DBIN-specific handlers, operand formulas, the reference VM, and the
    clear-image workflow in private vmspec-tests; replace their manual
    knowledge with inferred semantics in the generic pipeline.
-5. Demonstrate complete CFG and C decompilation, then generalize family
-   frontends/state detection and expand equivalence tests and benchmarks.
+5. Validate a second VM family, then generalize dispatcher/VPC/VSP/handler
+   discovery and expand equivalence tests and benchmarks.
 
 The core backend currently requires 32-bit little-endian targets. Unsupported
 ASTs, symbolic access sizes/conditions, missing handler graphs and unresolved

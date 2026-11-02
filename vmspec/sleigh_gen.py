@@ -176,7 +176,7 @@ def _const_bool(cond: Expr | None) -> bool | None:
 
 def _emit_control(node: Block, r: _Render, out: list[str]) -> None:
     for edge in node.branches:
-        cond, tid = edge.condition, edge.target
+        cond, tid = edge.guard.condition if edge.guard is not None else None, edge.target
         const = _const_bool(cond)
         if cond is None or const is True:
             out.append(f"goto <{_node_label(tid)}>;")
@@ -195,9 +195,10 @@ def _emit_body(instruction: Instruction, r: _Render, lines: list[str]) -> None:
     targets = {instruction.entry}
     for node in body:
         for edge in node.branches:
-            if _const_bool(edge.condition) is not False:
+            condition = edge.guard.condition if edge.guard is not None else None
+            if _const_bool(condition) is not False:
                 targets.add(edge.target)
-            if edge.condition is None or _const_bool(edge.condition) is True:
+            if condition is None or _const_bool(condition) is True:
                 break
     lines.append(f"goto <{_node_label(instruction.entry)}>;")
     for node in body:

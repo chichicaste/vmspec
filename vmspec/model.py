@@ -20,6 +20,7 @@ __all__ = [
     "MemAccess",
     "Call",
     "RegisterAccess",
+    "BranchGuard",
     "ContextAssumption",
     "StateNode",
     "GraphNode",
@@ -138,8 +139,15 @@ class RegisterAccess:
 
 
 @dataclass
+class BranchGuard:
+    """A condition produced by an actual control-flow branch."""
+
+    condition: object
+
+
+@dataclass
 class ContextAssumption:
-    """A path guard introduced when DSE proves one context value is unique."""
+    """An analysis-only constraint used to specialize a DSE state."""
 
     condition: object
 
@@ -148,27 +156,15 @@ class ContextAssumption:
 class StateNode:
     """A node in the per-handler DSE state tree.
 
-    ``effects`` preserves the event order recorded by angr across memory,
-    register, and call operations. ``cond`` is an incoming branch guard or
-    specialization assumption; ``successors`` are the DSE states that follow.
+    ``effects`` preserves angr event order. ``guard`` represents an actual
+    branch; assumptions constrain analysis but are not executable control flow.
     """
 
     addr: int
     effects: list[MemAccess | RegisterAccess | Call] = field(default_factory=list)
     successors: list["StateNode"] = field(default_factory=list)
-    cond: object | None = None
-
-    @property
-    def mem_ops(self) -> list[MemAccess]:
-        return [op for op in self.effects if isinstance(op, MemAccess)]
-
-    @property
-    def calls(self) -> list[Call]:
-        return [op for op in self.effects if isinstance(op, Call)]
-
-    @property
-    def register_ops(self) -> list[RegisterAccess]:
-        return [op for op in self.effects if isinstance(op, RegisterAccess)]
+    guard: BranchGuard | None = None
+    assumptions: list[ContextAssumption] = field(default_factory=list)
 
 
 @dataclass
@@ -181,12 +177,11 @@ class GraphNode:
         addr: VM (or host) address this node corresponds to.
         ops: Ordered simplified operations to translate to P-Code
             (``MemAccess``, ``RegisterAccess``, ``Call``, plus arithmetic).
-        successors: ``(edge_condition, target_node_id)`` pairs.  The
-            condition is the guard of the target state, or ``None`` for an
-            unconditional fall-through.
+        successors: ``(BranchGuard | None, target_node_id)`` pairs.
     """
 
     id: int
     addr: int
     ops: list = field(default_factory=list)
-    successors: list[tuple[object, int]] = field(default_factory=list)
+    successors: list[tuple[BranchGuard | None, int]] = field(default_factory=list)
+    assumptions: list[ContextAssumption] = field(default_factory=list)

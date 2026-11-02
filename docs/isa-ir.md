@@ -21,6 +21,7 @@ from analysis objects. `vmspec.sleigh_gen.generate_sleigh` accepts only an
 | `encoding` | Expression matched by the raw opcode byte; optional total byte length |
 | `operands` | Operand name, byte offset, encoded byte size and decoded value expression |
 | `blocks`, `entry` | Ordered effects and guarded edges; entry block id |
+| `Block.assumptions` | Analysis-only context constraints; never executable branches |
 | `reads`, `writes` | Derived memory-effect views over the blocks |
 | `stack_effect` | Optional summary expression; it is not an additional executable effect |
 | `expressions` | All unique expressions used by the instruction |
@@ -31,8 +32,11 @@ Blocks are authoritative for execution order. Derived lists are useful for
 inspection but must not be executed as separate instruction phases: a store,
 call and second store retain their original order in `block.operations`.
 Branch targets are local block ids, not native instruction addresses.
-Branches are considered in order; a block with no selected edge exits the
-instruction. `source_address` and call `site` are optional provenance.
+Branches carry a `BranchGuard` created by actual native control flow and are
+considered in order; a block with no selected edge exits the instruction.
+`ContextAssumption` is separate metadata produced by DSE specialization and is
+not emitted as a branch. `source_address` and call `site` are optional
+provenance.
 
 Expressions use named operations such as `add`, `slt`, `lshr`, `ashr`,
 `extract`, `concat` and `ite`, with explicit bit widths. Arithmetic
@@ -106,7 +110,8 @@ native register binding and complete context specialization remain separate
 work.
 
 Tests verify JSON-compatible IR without analysis objects, deterministic
-temporary names, effect order, frontend encoding callbacks, typing and dominance.
+temporary names, mixed memory/register/call effect order, specialization metadata,
+frontend encoding callbacks, typing and dominance.
 A subprocess without site-packages builds an ISA and emits SLEIGH. Ghidra
 tests compile clear and frontend-encoded patterns, and the native/P-Code branch
 comparison passes through the new IR boundary.

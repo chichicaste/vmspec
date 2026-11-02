@@ -111,7 +111,7 @@ def _operand_reads(nodes, vpc_name):
                 (op.value,) if isinstance(op, RegisterAccess) else
                 (op.target,) if isinstance(op, Call) else ()
             )]
-            + [condition for condition, _ in node.successors if condition is not None]
+            + [guard.condition for guard, _ in node.successors if guard is not None]
         )
     ]
     for read, relative in candidates:
@@ -201,9 +201,12 @@ def lower_handler(handler: Handler, graph: GraphNode, vm_state: VMState, *, opco
                 ))
             else:
                 raise ValueError(f"unsupported state-graph operation: {op!r}")
-        branches = tuple(ir.Branch(ids[target], lower_expression(cond, symbols) if cond is not None else None)
-                         for cond, target in node.successors)
-        blocks.append(ir.Block(ids[node.id], tuple(operations), branches, node.addr))
+        branches = tuple(ir.Branch(
+            ids[target], ir.BranchGuard(lower_expression(guard.condition, symbols)) if guard else None
+        ) for guard, target in node.successors)
+        assumptions = tuple(ir.ContextAssumption(lower_expression(item.condition, symbols))
+                            for item in node.assumptions)
+        blocks.append(ir.Block(ids[node.id], tuple(operations), branches, node.addr, assumptions))
 
     raw_opcode = ir.Expr("const", 8, value=opcode)
     updates = ()

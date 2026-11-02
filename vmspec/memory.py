@@ -32,17 +32,13 @@ class Recorder(angr.SimStatePlugin):
         super().__init__()
         self.regions = tuple(regions)
         self.read_only_ranges = tuple(read_only_ranges)
-        self.mem_ops: list[MemAccess] = []
-        self.calls: list[Call] = []
-        self.register_ops: list[RegisterAccess] = []
+        self.effects: list[MemAccess | RegisterAccess | Call] = []
         self.recent_writes: list[_Write] = []
 
     @angr.SimStatePlugin.memo
     def copy(self, memo):
         c = Recorder(self.regions, self.read_only_ranges)
-        c.mem_ops = list(self.mem_ops)
-        c.calls = list(self.calls)
-        c.register_ops = list(self.register_ops)
+        c.effects = list(self.effects)
         c.recent_writes = list(self.recent_writes)
         return c
 
@@ -53,14 +49,9 @@ class Recorder(angr.SimStatePlugin):
         return False
 
     def record(self, op):
-        if isinstance(op, MemAccess):
-            self.mem_ops.append(op)
-        elif isinstance(op, Call):
-            self.calls.append(op)
-        elif isinstance(op, RegisterAccess):
-            self.register_ops.append(op)
-        else:
+        if not isinstance(op, (MemAccess, Call, RegisterAccess)):
             raise TypeError(f"unsupported recorded operation: {op!r}")
+        self.effects.append(op)
         self.state.history.add_event("vmspec", operation=op)
 
     def _inside(self, addr, size, base, length):

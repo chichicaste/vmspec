@@ -58,8 +58,11 @@ def main(argv: list[str]) -> int:
         node = nodes[nid]
         ops = [type(o).__name__ for o in node.ops]
         print(f"  n{nid} addr=0x{node.addr:X} ops={ops}")
-        for cond, tid in node.successors:
-            print(f"      -> n{tid}  cond={_cond_desc(cond)}")
+        for guard, tid in node.successors:
+            cond = guard.condition if guard is not None else None
+            print(f"      -> n{tid}  guard={_cond_desc(cond)}")
+        for assumption in node.assumptions:
+            print(f"      assumption={_cond_desc(assumption.condition)}")
     return 0
 
 

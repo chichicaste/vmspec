@@ -6,7 +6,7 @@ their ordered operations and guarded successor edges agree.
 """
 from __future__ import annotations
 
-from .model import Call, GraphNode, MemAccess, RegisterAccess, StateNode
+from .model import BranchGuard, Call, GraphNode, MemAccess, RegisterAccess, StateNode
 
 
 def _key(value):
@@ -78,20 +78,23 @@ def build_state_graph(root: StateNode) -> GraphNode:
                 raise TypeError(f"unsupported state effect: {op!r}")
             kept.append(op)
         # Incoming conditions execute before this node's effects.
-        live.update(_references(node.cond))
+        if node.guard is not None:
+            live.update(_references(node.guard.condition))
         uses[id(node)] = live
         ops = list(reversed(kept))
-        edges = [(child.cond, graphs[id(child)].id) for child in node.successors]
+        edges = [(child.guard, graphs[id(child)].id) for child in node.successors]
+        assumptions = list(node.assumptions)
         signatures = tuple(
             ("mem", op.kind, op.size, op.endness, _key(op.addr), _key(op.value))
             if isinstance(op, MemAccess) else
             ("register", op.register, op.size, _key(op.value)) if isinstance(op, RegisterAccess) else
             ("call", op.site, _key(op.target))
-            for op in ops
+          for op in ops
         )
-        key = (node.addr, signatures, tuple((_key(cond), nid) for cond, nid in edges))
+        key = (node.addr, signatures, tuple((_key(guard.condition) if guard else None, nid) for guard, nid in edges),
+               tuple(_key(assumption.condition) for assumption in assumptions))
         if key not in cache:
-            cache[key] = GraphNode(len(cache), node.addr, ops, edges)
+            cache[key] = GraphNode(len(cache), node.addr, ops, edges, assumptions)
         graphs[id(node)] = cache[key]
     graph = graphs[id(root)]
     graph._nodes = {node.id: node for node in graphs.values()}
